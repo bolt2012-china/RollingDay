@@ -14,7 +14,8 @@ a{color:#8af}
 #now{font-weight:bold;color:#7fd}
 #nx{color:#aaa;font-size:13px}
 #err{color:#f77;font-size:13px;white-space:pre-wrap}
-#vp{height:calc(100vh - 74px);overflow:hidden}
+#vp{height:calc(100vh - 74px);overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y}
+#scrollHint{display:none;position:fixed;right:10px;bottom:10px;z-index:5;background:rgba(20,57,47,.92);color:#9fe;font-size:11px;padding:3px 8px;border-radius:10px;pointer-events:none}
 h3{margin:12px 12px 4px;color:#8af;font-size:14px}
 .b{margin:3px 10px;padding:6px 9px;border-radius:6px;background:#1e1e1e;border-left:3px solid #555}
 .b.cls{border-color:#a7f}
@@ -36,12 +37,13 @@ h3{margin:12px 12px 4px;color:#8af;font-size:14px}
   <div id="err"></div>
 </div>
 <div id="vp"><div id="c"></div></div>
+<div id="scrollHint">已暂停自动滚动</div>
 <script>
 const LS_GIST = "rollingday.gist";
 const LS_TZ = "rollingday.timezone";
 const LS_TOKEN = "rollingday.githubToken";
 const LS_DEMO_DONE = "rollingday.demoDone";
-let pos = 0, paused = 0, S = null, DONE = new Set(), pend = {}, lastW = 0;
+let S = null, DONE = new Set(), pend = {}, lastW = 0;
 
 function query() {
   return new URLSearchParams(location.search);
@@ -155,7 +157,7 @@ function render(s) {
           nxt = b;
         }
       } else if (!nxt && !cur && b.kind !== "note") {
-        nxt = { ...b, start: (d.label || d.date) + " " + b.start };
+        nxt = Object.assign({}, b, { start: (d.label || d.date) + " " + b.start });
       }
       h += `<div class="${k}"><div class="t">${esc(b.start)}${b.end ? "–" + esc(b.end) : ""}</div>${esc(b.title)}</div>`;
     }
@@ -247,13 +249,51 @@ async function load() {
 load();
 setInterval(load, 60000);
 const vp = document.getElementById("vp");
-vp.onclick = () => paused ^= 1;
-setInterval(() => {
-  if (paused) return;
-  pos += scrollStep();
-  if (pos > vp.scrollHeight - vp.clientHeight + 60) pos = -120;
-  vp.scrollTop = Math.max(0, pos);
-}, 40);
+/* RollingDay auto-scroll: native scrolling + pause on interaction, resume after idle */
+function rdAutoScroll(vp, opts) {
+  opts = opts || {};
+  var step = opts.step || 0.5;
+  var idleMs = opts.idleMs || 5000;
+  var hintEl = opts.hintEl || null;
+  var blocked = opts.blocked || function () { return false; };
+  var pos = vp.scrollTop;
+  var lastSet = -1;
+  var pausedUntil = 0;
+  var wasPaused = false;
+  function showHint(on) {
+    if (!hintEl) return;
+    hintEl.style.display = on ? "block" : "none";
+  }
+  function pause() {
+    pausedUntil = Date.now() + idleMs;
+    if (!wasPaused) { wasPaused = true; showHint(true); }
+  }
+  var evs = ["touchstart", "touchmove", "wheel", "pointerdown", "mousedown", "keydown"];
+  for (var i = 0; i < evs.length; i++) {
+    vp.addEventListener(evs[i], pause, { passive: true });
+  }
+  vp.addEventListener("scroll", function () {
+    // Ignore scroll events caused by our own scrollTop writes
+    if (Math.abs(vp.scrollTop - lastSet) <= 2) return;
+    pause();
+  }, { passive: true });
+  setInterval(function () {
+    if (Date.now() < pausedUntil || blocked()) return;
+    if (wasPaused) {
+      wasPaused = false;
+      showHint(false);
+      pos = vp.scrollTop; // resume from where the user left it
+    }
+    var max = vp.scrollHeight - vp.clientHeight;
+    if (max <= 0) { pos = 0; return; }
+    pos += step;
+    if (pos > max + 60) pos = -120;
+    vp.scrollTop = Math.max(0, pos);
+    lastSet = vp.scrollTop;
+  }, 40);
+  return { pause: pause };
+}
+rdAutoScroll(vp, { step: scrollStep(), idleMs: 5000, hintEl: document.getElementById("scrollHint") });
 </script>
 </body>
 </html>

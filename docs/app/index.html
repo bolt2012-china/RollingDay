@@ -26,7 +26,7 @@ html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font: 15px/1.45 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  display: flex; flex-direction: column; overflow: hidden; padding-top: var(--top);
+  display: flex; flex-direction: column; padding-top: var(--top);
 }
 button, input, select { font: inherit; color: inherit; }
 a { color: var(--teal-bright); }
@@ -61,7 +61,9 @@ a { color: var(--teal-bright); }
 #hint { margin: 6px 2px 0; font-size: 12px; color: var(--warn); min-height: 1.2em; }
 #hint.ok { color: var(--muted); }
 
-#vp { flex: 1 1 auto; overflow: hidden; position: relative; touch-action: pan-y; }
+#vp { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; position: relative; touch-action: pan-y; }
+#scrollHint { display: none; position: fixed; right: 10px; bottom: calc(34px + var(--safe)); z-index: 15; background: rgba(20,57,47,.92); color: #9fe; font-size: 11px; padding: 3px 8px; border-radius: 10px; pointer-events: none; }
+.b { touch-action: pan-y; }
 #c { padding: 4px 0 80px; }
 h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
 
@@ -201,7 +203,8 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
 </div>
 
 <div id="vp"><div id="c"></div></div>
-<div id="ft">v3 · 数据仅存本机 · 离线可用 · <span id="pauseHint">点空白处暂停滚动</span></div>
+<div id="ft">v4 · 数据仅存本机 · 离线可用 · 手指可上下滑动</div>
+<div id="scrollHint">已暂停自动滚动</div>
 <div id="toast" class="toast"></div>
 
 <!-- Quick actions (tap fallback) -->
@@ -294,6 +297,51 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
 window.onerror=function(m,s,l,c){var b=document.getElementById("errBanner");if(b){b.style.display="block";b.textContent="出错了："+m+(l?" (行 "+l+")":"")+"\n请截图反馈，或刷新重试。";}};
 </script>
 <script>
+/* RollingDay auto-scroll: native scrolling + pause on interaction, resume after idle */
+function rdAutoScroll(vp, opts) {
+  opts = opts || {};
+  var step = opts.step || 0.5;
+  var idleMs = opts.idleMs || 5000;
+  var hintEl = opts.hintEl || null;
+  var blocked = opts.blocked || function () { return false; };
+  var pos = vp.scrollTop;
+  var lastSet = -1;
+  var pausedUntil = 0;
+  var wasPaused = false;
+  function showHint(on) {
+    if (!hintEl) return;
+    hintEl.style.display = on ? "block" : "none";
+  }
+  function pause() {
+    pausedUntil = Date.now() + idleMs;
+    if (!wasPaused) { wasPaused = true; showHint(true); }
+  }
+  var evs = ["touchstart", "touchmove", "wheel", "pointerdown", "mousedown", "keydown"];
+  for (var i = 0; i < evs.length; i++) {
+    vp.addEventListener(evs[i], pause, { passive: true });
+  }
+  vp.addEventListener("scroll", function () {
+    // Ignore scroll events caused by our own scrollTop writes
+    if (Math.abs(vp.scrollTop - lastSet) <= 2) return;
+    pause();
+  }, { passive: true });
+  setInterval(function () {
+    if (Date.now() < pausedUntil || blocked()) return;
+    if (wasPaused) {
+      wasPaused = false;
+      showHint(false);
+      pos = vp.scrollTop; // resume from where the user left it
+    }
+    var max = vp.scrollHeight - vp.clientHeight;
+    if (max <= 0) { pos = 0; return; }
+    pos += step;
+    if (pos > max + 60) pos = -120;
+    vp.scrollTop = Math.max(0, pos);
+    lastSet = vp.scrollTop;
+  }, 40);
+  return { pause: pause };
+}
+
 (function () {
   "use strict";
 
@@ -916,6 +964,7 @@ window.onerror=function(m,s,l,c){var b=document.getElementById("errBanner");if(b
     gesture.longTimer = setTimeout(() => {
       if (gesture.moved || gesture.swiping) return;
       gesture.longFired = true;
+      lastLongFireAt = Date.now();
       if (navigator.vibrate) try { navigator.vibrate(15); } catch (err) {}
       openEdit(id);
     }, 480);
@@ -927,14 +976,19 @@ window.onerror=function(m,s,l,c){var b=document.getElementById("errBanner");if(b
     const y = ptY(e);
     gesture.dx = x - gesture.startX;
     gesture.dy = y - gesture.startY;
-    if (!gesture.moved && (Math.abs(gesture.dx) > 8 || Math.abs(gesture.dy) > 8)) {
+    var adx = Math.abs(gesture.dx), ady = Math.abs(gesture.dy);
+    if (!gesture.moved && (adx > 8 || ady > 8)) {
       gesture.moved = true;
       clearTimeout(gesture.longTimer);
     }
-    if (!gesture.swiping && Math.abs(gesture.dx) > 12 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2) {
+    if (!gesture.swiping && ady > 10 && ady >= adx) {
+      // Vertical: hand over to native scrolling, never claim this gesture
+      gesture.el.classList.remove("dragging");
+      gesture.el = null;
+      return;
+    }
+    if (!gesture.swiping && adx > 10 && adx > ady * 1.5) {
       gesture.swiping = true;
-      paused = true;
-      $("pauseHint").textContent = "已暂停 · 点空白继续";
       if (openSwipeId && openSwipeId !== gesture.id) closeAllSwipes(gesture.id);
     }
     if (gesture.swiping) {
@@ -977,11 +1031,32 @@ window.onerror=function(m,s,l,c){var b=document.getElementById("errBanner");if(b
     gesture.el = null;
   }
 
+  var lastLongFireAt = 0;
+  // Cancel the click the browser synthesizes after a long-press touch, so it
+  // cannot land on the freshly opened edit sheet's backdrop and close it.
+  c.addEventListener("touchend", function (e) {
+    if (lastLongFireAt && Date.now() - lastLongFireAt < 5000) {
+      lastLongFireAt = 0;
+      if (e.cancelable) e.preventDefault();
+    }
+  }, { passive: false });
+  c.addEventListener("contextmenu", function (e) {
+    if (e.target.closest && e.target.closest(".b")) e.preventDefault();
+  });
+  function onPointerCancel() {
+    clearTimeout(gesture.longTimer);
+    if (gesture.el) {
+      gesture.el.classList.remove("dragging");
+      if (gesture.swiping) gesture.el.style.transform = openSwipeId === gesture.id ? "translateX(-" + ACTION_W + "px)" : "";
+    }
+    gesture.el = null;
+  }
+
   if (window.PointerEvent) {
     c.addEventListener("pointerdown", onPointerDown);
     c.addEventListener("pointermove", onPointerMove);
     c.addEventListener("pointerup", onPointerUp);
-    c.addEventListener("pointercancel", onPointerUp);
+    c.addEventListener("pointercancel", onPointerCancel);
   } else {
     var lastTouch = 0;
     var touchWrap = function (fn) { return function (e) { lastTouch = Date.now(); fn(e); }; };
@@ -989,7 +1064,7 @@ window.onerror=function(m,s,l,c){var b=document.getElementById("errBanner");if(b
     c.addEventListener("touchstart", touchWrap(onPointerDown), { passive: true });
     c.addEventListener("touchmove", touchWrap(onPointerMove), { passive: false });
     c.addEventListener("touchend", touchWrap(onPointerUp));
-    c.addEventListener("touchcancel", touchWrap(onPointerUp));
+    c.addEventListener("touchcancel", touchWrap(onPointerCancel));
     c.addEventListener("mousedown", mouseWrap(onPointerDown));
     c.addEventListener("mousemove", mouseWrap(onPointerMove));
     c.addEventListener("mouseup", mouseWrap(onPointerUp));
@@ -1011,8 +1086,6 @@ window.onerror=function(m,s,l,c){var b=document.getElementById("errBanner");if(b
     }
     if (!e.target.closest(".b") && !e.target.closest(".row-actions")) {
       if (openSwipeId) { closeAllSwipes(); render(); return; }
-      paused ^= true;
-      $("pauseHint").textContent = paused ? "已暂停 · 再点继续" : "点空白处暂停滚动";
     }
   });
 
@@ -1136,14 +1209,12 @@ window.onerror=function(m,s,l,c){var b=document.getElementById("errBanner");if(b
     }
   });
 
-  setInterval(() => {
-    if (paused || openSwipeId || gesture.el) return;
-    const max = Math.max(0, c.scrollHeight - vp.clientHeight + 40);
-    if (max <= 0) { vp.scrollTop = 0; scrollPos = 0; return; }
-    scrollPos += 0.45;
-    if (scrollPos > max + 80) scrollPos = -100;
-    vp.scrollTop = Math.max(0, scrollPos);
-  }, 40);
+  rdAutoScroll(vp, {
+    step: 0.45,
+    idleMs: 5000,
+    hintEl: $("scrollHint"),
+    blocked: function () { return !!openSwipeId || !!gesture.el || $("editMask").classList.contains("show"); }
+  });
 
   setInterval(render, 30000);
   document.addEventListener("visibilitychange", () => {
