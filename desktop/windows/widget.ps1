@@ -64,7 +64,12 @@ $TokenFile = if ($Config.token_file) { [string]$Config.token_file } else { Join-
 # Icon lives beside this script (install copies schedule.ico into %APPDATA%\RollingDay).
 $IcoPath = if ($Config.icon_path) { [string]$Config.icon_path } else { Join-Path $PSScriptRoot 'schedule.ico' }
 
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# Windows PowerShell 5.1 defaults to TLS 1.0/1.1; GitHub requires TLS 1.2+.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]'Tls13' } catch {}
+# Last good schedule is cached beside the script so it survives restarts.
+$CacheFile = if ($Config.cache_file) { [string]$Config.cache_file } else { Join-Path $PSScriptRoot 'schedule.cache.json' }
+$script:lastOk = $null
 $w = New-Object Windows.Window -Property @{
   WindowStyle = 'None'
   AllowsTransparency = $true
@@ -95,6 +100,16 @@ $hd = New-Object Windows.Controls.TextBlock -Property @{
 }
 [Windows.Controls.DockPanel]::SetDock($hd, 'Top')
 [void]$dp.Children.Add($hd)
+# Small status line shown only when a refresh fails.
+$stl = New-Object Windows.Controls.TextBlock -Property @{
+  Foreground = '#aa8866'
+  FontFamily = 'Microsoft YaHei'
+  FontSize = 10
+  Margin = '0,4,0,0'
+  Visibility = 'Collapsed'
+}
+[Windows.Controls.DockPanel]::SetDock($stl, 'Bottom')
+[void]$dp.Children.Add($stl)
 $sv = New-Object Windows.Controls.ScrollViewer -Property @{ VerticalScrollBarVisibility = 'Hidden' }
 $sp = New-Object Windows.Controls.StackPanel
 $sv.Content = $sp
@@ -115,16 +130,29 @@ function Add-Line($text, $color, $bold = $false, $background = $null) {
   [void]$sp.Children.Add($tb)
 }
 
+function Get-WithRetry($url, $token = $null) {
+  $err = $null
+  foreach ($ms in 0, 800, 2000) {
+    if ($ms) { Start-Sleep -Milliseconds $ms }
+    try { return (New-Client $token).DownloadString($url) } catch { $err = $_ }
+  }
+  throw $err
+}
+
+function Set-Status($text) {
+  if ($text) { $stl.Text = $text; $stl.Visibility = 'Visible' } else { $stl.Text = ''; $stl.Visibility = 'Collapsed' }
+}
+
 function Read-GistFile($name, $token = $null) {
   if (-not $Gist.id -or $Gist.id -eq 'gist_id') {
     throw "请先编辑 $ConfigPath，设置 gist 为 owner/gist_id"
   }
   if ($Gist.owner) {
     $url = "https://gist.githubusercontent.com/$($Gist.owner)/$($Gist.id)/raw/$name?t=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
-    try { return (New-Client $token).DownloadString($url) } catch {}
+    try { return Get-WithRetry $url $token } catch {}
   }
   $api = "https://api.github.com/gists/$($Gist.id)"
-  $gistObj = (New-Client $token).DownloadString($api) | ConvertFrom-Json
+  $gistObj = Get-WithRetry $api $token | ConvertFrom-Json
   if (-not $gistObj.files.$name) { throw "gist 中缺少 $name" }
   return $gistObj.files.$name.content
 }
@@ -181,7 +209,8 @@ function New-ItemText($text, $color, $background = $null) {
 
 function Load-Schedule {
   try {
-    $schedule = Read-GistFile 'schedule.json' | ConvertFrom-Json
+    $raw = Read-GistFile 'schedule.json'
+    $schedule = $raw | ConvertFrom-Json
     if (((Get-Date) - $script:lastW).TotalMinutes -gt 3) {
       try {
         $doneJson = Read-GistFile 'done.json' | ConvertFrom-Json
@@ -196,12 +225,34 @@ function Load-Schedule {
       } catch {}
     }
     $script:S = $schedule
+    $script:lastOk = Get-Date
+    Set-Status $null
+    try { [IO.File]::WriteAllText($CacheFile, $raw, (New-Object Text.UTF8Encoding $false)) } catch {}
     # Don't rebuild the list under an active drag or an open swipe.
     if ($script:gs -or $script:openRow) { return }
     Render-Schedule $schedule
   } catch {
-    $hd.Text = "加载失败：$($_.Exception.Message)"
+    # Keep showing the last good data; just note the failure.
+    $lt = if ($script:lastOk) { $script:lastOk.ToString('HH:mm') } else { '--:--' }
+    Set-Status "上次更新 $lt，刷新失败，稍后重试"
+    if (-not $script:S) { $hd.Text = '暂无数据，稍后重试' }
   }
+}
+
+function Load-Cache {
+  try {
+    if (Test-Path $CacheFile) {
+      $script:S = Get-Content $CacheFile -Raw -Encoding UTF8 | ConvertFrom-Json
+      $script:lastOk = (Get-Item $CacheFile).LastWriteTime
+      Render-Schedule $script:S
+    }
+  } catch {}
+}
+
+function Refresh-Now {
+  $script:openRow = $null
+  $script:gs = $null
+  Load-Schedule
 }
 
 function Render-Schedule($schedule) {
@@ -419,7 +470,9 @@ function Add-Item($el, $item, $type) {
   $mi2 = New-Object Windows.Controls.MenuItem -Property @{ Header = '删除' }
   $mi2.Tag = $info
   $mi2.Add_Click({ param($o, $e) RD-Delete $o.Tag })
-  [void]$cm.Items.Add($mi1); [void]$cm.Items.Add($mi2)
+  $mi3 = New-Object Windows.Controls.MenuItem -Property @{ Header = '刷新' }
+  $mi3.Add_Click({ Refresh-Now })
+  [void]$cm.Items.Add($mi1); [void]$cm.Items.Add($mi2); [void]$cm.Items.Add($mi3)
   $row.ContextMenu = $cm   # right-click on an item; window/tray menus are untouched
   $row.Add_PreviewMouseLeftButtonDown({
     param($o, $e)
@@ -655,7 +708,7 @@ $timerScroll.Add_Tick({
 })
 $timerScroll.Start()
 
-$w.Add_Loaded({ Load-Schedule })
+$w.Add_Loaded({ Load-Cache; Load-Schedule })
 $w.Add_Closing({
   param($o, $e)
   if (-not $script:reallyExit) {
@@ -665,6 +718,9 @@ $w.Add_Closing({
 })
 
 $wcm = New-Object Windows.Controls.ContextMenu
+$miWR = New-Object Windows.Controls.MenuItem -Property @{ Header = '刷新' }
+$miWR.Add_Click({ Refresh-Now })
+[void]$wcm.Items.Add($miWR)
 $miWH = New-Object Windows.Controls.MenuItem -Property @{ Header = '隐藏' }
 $miWH.Add_Click({ Hide-Win })
 [void]$wcm.Items.Add($miWH)
@@ -701,11 +757,13 @@ $script:ni.Visible = $true
 $tcm = New-Object Windows.Forms.ContextMenuStrip
 $miShow = $tcm.Items.Add('显示/打开')
 $miHide = $tcm.Items.Add('隐藏')
+$miRefresh = $tcm.Items.Add('刷新')
 [void]$tcm.Items.Add('-')
 $miExit = $tcm.Items.Add('退出')
 $script:ni.ContextMenuStrip = $tcm
 $miShow.Add_Click({ Show-Win })
 $miHide.Add_Click({ Hide-Win })
+$miRefresh.Add_Click({ Refresh-Now })
 $miExit.Add_Click({ Exit-App })
 $script:ni.Add_MouseDoubleClick({ Show-Win })
 $script:ni.Add_BalloonTipClicked({ Show-Win })
