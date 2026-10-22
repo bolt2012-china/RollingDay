@@ -14,9 +14,51 @@ RollingDay 是一个轻量的个人日程工具：用 Markdown 写日程和待�
 - 小组件尺寸 demo 是 `web/index.html?demo=1` 以 `300x380` 视口渲染的录屏，用于展示与 Windows 小组件相近的紧凑滚动观感；不是原生 WPF 窗口录屏。
 - 本 demo 使用 `examples/schedule.json` 和 `examples/done.json` 中的虚构中文学生日程。
 
+
+## 手机 PWA（本机存储）
+
+无需 GitHub token / gist，打开即可用；数据只存在手机浏览器的 `localStorage`，首次加载后可离线使用。
+
+**地址：** [https://bolt2012-china.github.io/RollingDay/app/](https://bolt2012-china.github.io/RollingDay/app/)
+
+落地页：[https://bolt2012-china.github.io/RollingDay/](https://bolt2012-china.github.io/RollingDay/)
+
+### 添加到主屏幕
+
+**iOS Safari**
+
+1. 用 Safari 打开上面的 PWA 地址；
+2. 点底部分享按钮（方框+向上箭头）；
+3. 下滑选择「添加到主屏幕」→「添加」。
+
+**Android Chrome**
+
+1. 用 Chrome 打开上面的 PWA 地址；
+2. 点右上角 ⋮ 菜单；
+3. 选择「添加到主屏幕」或「安装应用」→ 确认。
+
+### 怎么输入
+
+顶部输入一行，按回车或点「添加」：
+
+```text
+周四-19:30-补DSP
+周五-08:00-09:45-高等数学
+今天-09:00-开会
+明天-交作业
+买菜
+```
+
+- `周几-开始-事件` 或 `周几-开始-结束-事件`；`今天` / `明天` 也可当周几。
+- 没有时间的行当作待办。
+- 点列表项可「完成 / 删除」；设置（⚙）可导出/导入 JSON 或清空数据。
+
+> 若仍想用 secret gist 跨设备同步，请继续用下方的 `web/index.html` + `sync/sync_gist.py` 流程。
+
 ## 功能
 
-- 手机网页：读取 gist 中的 `schedule.json` / `done.json`，自动滚动今天及之后的日程块和待办。
+- 手机 PWA：一行输入日程，本机存储、可离线、可添加到主屏幕（见上一节）。
+- 手机网页（gist 版）：读取 gist 中的 `schedule.json` / `done.json`，自动滚动今天及之后的日程块和待办。
 - 待办勾选：网页端用 GitHub API PATCH `done.json`，token 仅保存在当前浏览器 `localStorage`。
 - Markdown 同步：`sync/sync_gist.py` 从 `todo.md` 和 `week_*.md` 生成 `schedule.json`，并把远端 `done.json` 合并回 `todo.md`。
 - Windows 小组件：PowerShell + WPF always-on-top 滚动窗口，支持勾选待办；系统托盘可隐藏/重新打开；token 用 Windows DPAPI 加密保存在本机。
@@ -25,7 +67,13 @@ RollingDay 是一个轻量的个人日程工具：用 Markdown 写日程和待�
 ## 目录结构
 
 ```text
-web/index.html                       # 手机/浏览器页面
+web/index.html                       # gist 版手机/浏览器页面
+docs/index.html                      # GitHub Pages 落地页
+docs/app/                            # 手机 PWA（本机存储，可离线）
+docs/app/index.html                  # PWA 主页面
+docs/app/manifest.webmanifest        # Web App Manifest
+docs/app/sw.js                       # Service Worker
+docs/app/icons/                      # 192/512 青绿日历图标
 desktop/windows/widget.ps1           # Windows WPF 悬浮小组件（含托盘）
 desktop/windows/install_startup.ps1  # 安装到开机启动（-STA + 图标）
 desktop/windows/schedule.ico         # 托盘/快捷方式图标（青绿日历）

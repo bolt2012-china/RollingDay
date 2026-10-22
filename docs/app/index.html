@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="theme-color" content="#0e7a6e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="滚滚日程">
+<meta name="description" content="一行输入、自动滚动的个人日程。数据仅存本机。">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<title>滚滚日程 RollingDay</title>
+<style>
+:root {
+  --bg: #111;
+  --panel: #1b1b1b;
+  --card: #1e1e1e;
+  --border: #333;
+  --text: #ddd;
+  --muted: #888;
+  --teal: #0e7a6e;
+  --teal-bright: #2db4a0;
+  --cur-bg: #14392f;
+  --cur-border: #3e9;
+  --danger: #e55;
+  --warn: #eb5;
+  --safe: env(safe-area-inset-bottom, 0px);
+  --top: env(safe-area-inset-top, 0px);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: var(--top);
+}
+button, input { font: inherit; color: inherit; }
+a { color: var(--teal-bright); }
+
+#hd {
+  flex: 0 0 auto;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px 8px;
+  z-index: 3;
+}
+.hd-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.brand h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: #7fd;
+  white-space: nowrap;
+}
+.brand .clock {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.icon-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  color: #9ab;
+}
+.icon-btn:active { background: #222; }
+
+#status {
+  font-size: 13px;
+  color: #9ab;
+  margin-bottom: 8px;
+  min-height: 1.2em;
+}
+#status .now { color: #7fd; font-weight: 600; }
+
+.add-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+#input {
+  flex: 1;
+  min-width: 0;
+  background: #141414;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  outline: none;
+}
+#input:focus { border-color: var(--teal-bright); }
+#input::placeholder { color: #666; }
+#addBtn {
+  flex: 0 0 auto;
+  background: var(--teal);
+  border: none;
+  border-radius: 10px;
+  padding: 0 16px;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+}
+#addBtn:active { filter: brightness(1.1); }
+#hint {
+  margin: 6px 2px 0;
+  font-size: 12px;
+  color: var(--warn);
+  min-height: 1.2em;
+}
+#hint.ok { color: var(--muted); }
+
+#vp {
+  flex: 1 1 auto;
+  overflow: hidden;
+  position: relative;
+  -webkit-overflow-scrolling: touch;
+}
+#c {
+  padding: 4px 0 80px;
+  will-change: transform;
+}
+h3 {
+  margin: 14px 14px 6px;
+  color: #8af;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.b {
+  margin: 4px 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--card);
+  border-left: 3px solid #555;
+  position: relative;
+  cursor: pointer;
+  transition: background .15s, opacity .15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.b:active { background: #252525; }
+.b.cls { border-color: #a7f; }
+.b.cur {
+  background: var(--cur-bg);
+  border-color: var(--cur-border);
+  box-shadow: 0 0 0 1px rgba(62, 153, 153, 0.25);
+}
+.b.past { opacity: 0.42; }
+.b.done {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+.b.todo { border-color: #eb5; }
+.b .t {
+  color: #9ab;
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+.b .title { word-break: break-word; }
+.b .badge {
+  float: right;
+  font-size: 11px;
+  color: var(--teal-bright);
+  margin-left: 8px;
+}
+
+#empty {
+  margin: 48px 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+#empty code {
+  display: block;
+  margin: 8px auto;
+  max-width: 280px;
+  text-align: left;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #9cf;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+#ft {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: #555;
+  padding: 6px 12px calc(6px + var(--safe));
+  border-top: 1px solid #222;
+  text-align: center;
+  background: #0d0d0d;
+}
+
+/* Action sheet */
+#sheetMask {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  z-index: 20;
+  align-items: flex-end;
+  justify-content: center;
+}
+#sheetMask.show { display: flex; }
+#sheet {
+  width: 100%;
+  max-width: 480px;
+  background: #1c1c1c;
+  border-radius: 16px 16px 0 0;
+  padding: 8px 12px calc(12px + var(--safe));
+  border-top: 1px solid #333;
+}
+#sheet .preview {
+  padding: 12px 8px 16px;
+  border-bottom: 1px solid #2a2a2a;
+  margin-bottom: 8px;
+}
+#sheet .preview .t { color: #9ab; font-size: 12px; }
+#sheet .preview .title { font-size: 16px; margin-top: 4px; }
+.sheet-btn {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 14px;
+  margin: 4px 0;
+  border: none;
+  border-radius: 12px;
+  background: #2a2a2a;
+  cursor: pointer;
+  font-size: 16px;
+}
+.sheet-btn.primary { background: var(--teal); color: #fff; font-weight: 600; }
+.sheet-btn.danger { color: var(--danger); }
+.sheet-btn:active { filter: brightness(1.15); }
+
+/* Settings */
+#settingsMask {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  z-index: 30;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+#settingsMask.show { display: flex; }
+#settings {
+  width: 100%;
+  max-width: 360px;
+  background: #1c1c1c;
+  border-radius: 14px;
+  padding: 16px;
+  border: 1px solid #333;
+}
+#settings h2 {
+  margin: 0 0 12px;
+  font-size: 17px;
+  color: #7fd;
+}
+#settings p {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.settings-actions { display: flex; flex-direction: column; gap: 8px; }
+.settings-actions button {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #333;
+  background: #2a2a2a;
+  cursor: pointer;
+}
+.settings-actions button.danger {
+  border-color: #633;
+  color: #f88;
+}
+.settings-actions button:active { filter: brightness(1.1); }
+#settings .close {
+  margin-top: 12px;
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.flash {
+  animation: flashIn .6s ease;
+}
+@keyframes flashIn {
+  from { background: #1a4a3c; }
+  to { background: var(--card); }
+}
+</style>
+</head>
+<body>
+<div id="hd">
+  <div class="hd-row">
+    <div class="brand">
+      <h1>滚滚日程</h1>
+      <span class="clock" id="clock"></span>
+    </div>
+    <button type="button" class="icon-btn" id="settingsBtn" aria-label="设置" title="设置">⚙</button>
+  </div>
+  <div id="status">现在：—</div>
+  <div class="add-row">
+    <input id="input" type="text" enterkeyhint="done" autocomplete="off" autocorrect="off"
+      placeholder="周四-19:30-补DSP 或 今天-08:00-09:45-高等数学"
+      aria-label="添加日程">
+    <button type="button" id="addBtn">添加</button>
+  </div>
+  <div id="hint" class="ok">格式：周几-时间-事件（可选结束时间；无时间=待办）</div>
+</div>
+
+<div id="vp"><div id="c"></div></div>
+<div id="ft">数据仅存本机 · 离线可用 · <span id="pauseHint">点列表暂停滚动</span></div>
+
+<div id="sheetMask" role="dialog" aria-modal="true">
+  <div id="sheet">
+    <div class="preview">
+      <div class="t" id="sheetTime"></div>
+      <div class="title" id="sheetTitle"></div>
+    </div>
+    <button type="button" class="sheet-btn primary" id="sheetDone">标记完成</button>
+    <button type="button" class="sheet-btn danger" id="sheetDel">删除</button>
+    <button type="button" class="sheet-btn" id="sheetCancel">取消</button>
+  </div>
+</div>
+
+<div id="settingsMask" role="dialog" aria-modal="true">
+  <div id="settings">
+    <h2>设置</h2>
+    <p>日程只保存在本机浏览器（localStorage），不会上传到 GitHub。可导出 JSON 以便备份或日后同步。</p>
+    <div class="settings-actions">
+      <button type="button" id="btnExport">导出 JSON</button>
+      <button type="button" id="btnImport">导入 JSON</button>
+      <button type="button" class="danger" id="btnClear">清空全部数据…</button>
+    </div>
+    <button type="button" class="close" id="settingsClose">关闭</button>
+    <input type="file" id="importFile" accept="application/json,.json" hidden>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const LS_KEY = "rollingday.pwa.v1";
+  const TZ = "Asia/Shanghai";
+  const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  const WEEKDAY_ALIASES = {
+    "周日": 0, "星期日": 0, "周天": 0, "星期天": 0, "日": 0,
+    "周一": 1, "星期一": 1, "一": 1,
+    "周二": 2, "星期二": 2, "二": 2,
+    "周三": 3, "星期三": 3, "三": 3,
+    "周四": 4, "星期四": 4, "四": 4,
+    "周五": 5, "星期五": 5, "五": 5,
+    "周六": 6, "星期六": 6, "六": 6,
+    "今天": "today", "今日": "today",
+    "明天": "tomorrow", "明日": "tomorrow"
+  };
+
+  /** @type {{items: Array, updatedAt: string}} */
+  let store = loadStore();
+  let scrollPos = 0;
+  let paused = false;
+  let selectedId = null;
+  let flashId = null;
+
+  const $ = (id) => document.getElementById(id);
+  const input = $("input");
+  const hint = $("hint");
+  const c = $("c");
+  const vp = $("vp");
+
+  function uid() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
+  function loadStore() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return { items: [], updatedAt: "" };
+      const data = JSON.parse(raw);
+      if (!data || !Array.isArray(data.items)) return { items: [], updatedAt: "" };
+      return { items: data.items, updatedAt: data.updatedAt || "" };
+    } catch (e) {
+      return { items: [], updatedAt: "" };
+    }
+  }
+
+  function saveStore() {
+    store.updatedAt = new Date().toISOString();
+    localStorage.setItem(LS_KEY, JSON.stringify(store));
+  }
+
+  function nowParts() {
+    const p = {};
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: TZ,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", weekday: "short",
+      hour12: false
+    });
+    for (const x of fmt.formatToParts(new Date())) p[x.type] = x.value;
+    // weekday short in en-CA is like "Thu" — compute weekday index via date
+    const date = `${p.year}-${p.month}-${p.day}`;
+    const hm = `${p.hour}:${p.minute}`;
+    // Get weekday in TZ
+    const wdFmt = new Intl.DateTimeFormat("en-US", { timeZone: TZ, weekday: "short" });
+    const map = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    const weekday = map[wdFmt.format(new Date())] ?? 0;
+    return { date, hm, weekday, year: +p.year, month: +p.month, day: +p.day };
+  }
+
+  function addDays(dateStr, days) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    dt.setUTCDate(dt.getUTCDate() + days);
+    const yy = dt.getUTCFullYear();
+    const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getUTCDate()).padStart(2, "0");
+    return `${yy}-${mm}-${dd}`;
+  }
+
+  function weekdayOf(dateStr) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    // Use noon UTC to avoid TZ edge; for calendar date label we use local weekday of that Y-M-D in Shanghai
+    // Simpler: Date.UTC + getUTCDay is correct for the civil date itself
+    return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  }
+
+  function labelFor(dateStr) {
+    const [y, m, d] = dateStr.split("-");
+    return `${+m}/${+d} ${WEEKDAYS[weekdayOf(dateStr)]}`;
+  }
+
+  function normalizeTime(t) {
+    const m = String(t || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const h = +m[1], mi = +m[2];
+    if (h < 0 || h > 23 || mi < 0 || mi > 59) return null;
+    return `${String(h).padStart(2, "0")}:${String(mi).padStart(2, "0")}`;
+  }
+
+  /**
+   * Parse one-line 「周几-时间-事件」.
+   * Examples:
+   *   周四-19:30-补DSP
+   *   周五-08:00-09:45-高等数学
+   *   今天-09:00-开会
+   *   明天-买菜          (todo on that day)
+   *   买菜               (todo, today)
+   * Returns { ok, error?, item? }
+   */
+  function parseLine(raw) {
+    const line = String(raw || "").trim();
+    if (!line) return { ok: false, error: "请输入内容，例如：周四-19:30-补DSP" };
+
+    // Fast path: no dash → todo today
+    if (!line.includes("-") && !line.includes("－") && !line.includes("—")) {
+      return {
+        ok: true,
+        item: {
+          id: uid(),
+          kind: "todo",
+          date: nowParts().date,
+          start: "",
+          end: "",
+          title: line,
+          done: false,
+          createdAt: new Date().toISOString()
+        }
+      };
+    }
+
+    // Normalize dashes
+    const parts = line.split(/[-－—]/).map((s) => s.trim()).filter((s) => s.length > 0);
+    if (parts.length < 2) {
+      return { ok: false, error: "格式不对。试试：周四-19:30-补DSP 或 周五-08:00-09:45-高等数学" };
+    }
+
+    const now = nowParts();
+    let date = now.date;
+    let idx = 0;
+
+    // Weekday / 今天 / 明天
+    const dayToken = parts[0];
+    const alias = WEEKDAY_ALIASES[dayToken];
+    if (alias === "today") {
+      date = now.date;
+      idx = 1;
+    } else if (alias === "tomorrow") {
+      date = addDays(now.date, 1);
+      idx = 1;
+    } else if (typeof alias === "number") {
+      let delta = (alias - now.weekday + 7) % 7;
+      // If same weekday and we already passed? keep today (delta 0)
+      date = addDays(now.date, delta);
+      idx = 1;
+    } else if (/^\d{1,2}[/.-]\d{1,2}$/.test(dayToken)) {
+      // optional M/D
+      const md = dayToken.split(/[/.-]/);
+      const mm = String(+md[0]).padStart(2, "0");
+      const dd = String(+md[1]).padStart(2, "0");
+      date = `${now.year}-${mm}-${dd}`;
+      // if date already passed this year by >1 day, still accept (user's choice)
+      idx = 1;
+    } else {
+      // No weekday — treat first part as time or title
+      idx = 0;
+      date = now.date;
+    }
+
+    if (idx >= parts.length) {
+      return { ok: false, error: "缺少事件内容。例如：周四-19:30-补DSP" };
+    }
+
+    // Time? (reject time-shaped but invalid tokens like 25:00)
+    function looksLikeTime(s) {
+      return /^\d{1,2}:\d{2}$/.test(String(s || "").trim());
+    }
+    if (looksLikeTime(parts[idx])) {
+      const t1 = normalizeTime(parts[idx]);
+      if (!t1) {
+        return { ok: false, error: "时间无效，请用 0–23 点，例如 19:30 或 08:00" };
+      }
+      idx += 1;
+      let t2 = "";
+      if (idx < parts.length && looksLikeTime(parts[idx])) {
+        t2 = normalizeTime(parts[idx]);
+        if (!t2) {
+          return { ok: false, error: "结束时间无效，请用 0–23 点，例如 09:45" };
+        }
+        idx += 1;
+      }
+      const title = parts.slice(idx).join("-").trim();
+      if (!title) {
+        return { ok: false, error: "缺少事件标题。例如：周四-19:30-补DSP" };
+      }
+      if (t2 && t2 <= t1) {
+        return { ok: false, error: "结束时间应晚于开始时间" };
+      }
+      return {
+        ok: true,
+        item: {
+          id: uid(),
+          kind: "block",
+          date,
+          start: t1,
+          end: t2,
+          title,
+          done: false,
+          createdAt: new Date().toISOString()
+        }
+      };
+    }
+
+    // No time after weekday → todo on that day
+    const title = parts.slice(idx).join("-").trim();
+    if (!title) {
+      return { ok: false, error: "缺少内容。无时间的行会当作待办，例如：明天-交作业" };
+    }
+    // If first token wasn't a weekday and isn't a time, whole line is todo
+    if (idx === 0) {
+      return {
+        ok: true,
+        item: {
+          id: uid(),
+          kind: "todo",
+          date: now.date,
+          start: "",
+          end: "",
+          title: line,
+          done: false,
+          createdAt: new Date().toISOString()
+        }
+      };
+    }
+    return {
+      ok: true,
+      item: {
+        id: uid(),
+        kind: "todo",
+        date,
+        start: "",
+        end: "",
+        title,
+        done: false,
+        createdAt: new Date().toISOString()
+      }
+    };
+  }
+
+  // Expose for smoke tests / console
+  window.__rollingdayParse = parseLine;
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (ch) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[ch]);
+  }
+
+  function groupItems() {
+    const map = new Map();
+    for (const it of store.items) {
+      if (!map.has(it.date)) map.set(it.date, []);
+      map.get(it.date).push(it);
+    }
+    for (const [, list] of map) {
+      list.sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === "block" ? -1 : 1;
+        if (a.start && b.start) return a.start < b.start ? -1 : a.start > b.start ? 1 : 0;
+        if (a.start) return -1;
+        if (b.start) return 1;
+        return (a.createdAt || "").localeCompare(b.createdAt || "");
+      });
+    }
+    return [...map.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1);
+  }
+
+  function render() {
+    const now = nowParts();
+    $("clock").textContent = `${now.date.slice(5)} ${WEEKDAYS[now.weekday]} ${now.hm}`;
+
+    const groups = groupItems();
+    // Keep today and future; also show past 1 day of unfinished? Keep all non-empty dates for simplicity, but grey past days
+    let html = "";
+    let cur = null;
+    let nxt = null;
+
+    if (!store.items.length) {
+      html = `<div id="empty">
+        还没有日程。在上方输入一行后按回车：
+        <code>周四-19:30-补DSP
+周五-08:00-09:45-高等数学
+今天-09:00-开会
+明天-交作业
+买菜</code>
+        有时间的是日程块，没有时间的是待办。数据只存在本机。
+      </div>`;
+      c.innerHTML = html;
+      $("status").innerHTML = "现在：空闲 · 添加第一条吧";
+      return;
+    }
+
+    for (const [date, items] of groups) {
+      if (date < addDays(now.date, -1)) continue; // hide older than yesterday
+      html += `<h3>${esc(labelFor(date))}</h3>`;
+      for (const it of items) {
+        const isBlock = it.kind === "block";
+        let cls = "b" + (isBlock ? "" : " todo");
+        if (it.done) cls += " done";
+        if (isBlock && date === now.date && it.start) {
+          const end = it.end || "23:59";
+          if (it.start <= now.hm && now.hm < end) {
+            cls += " cur";
+            if (!it.done) cur = it;
+          } else if (end <= now.hm || it.done) {
+            cls += " past";
+          } else if (!nxt && !it.done) {
+            nxt = it;
+          }
+        } else if (date < now.date) {
+          cls += " past";
+        } else if (!cur && !nxt && isBlock && !it.done && date >= now.date) {
+          nxt = it;
+        }
+        if (it.id === flashId) cls += " flash";
+
+        const timeLabel = isBlock
+          ? `${esc(it.start)}${it.end ? "–" + esc(it.end) : ""}`
+          : (it.date === now.date ? "待办 · 今天" : `待办 · ${esc(labelFor(it.date))}`);
+
+        html += `<div class="${cls}" data-id="${esc(it.id)}">` +
+          (it.done ? `<span class="badge">已完成</span>` : "") +
+          `<div class="t">${timeLabel}</div>` +
+          `<div class="title">${esc(it.title)}</div></div>`;
+      }
+    }
+
+    if (!html) {
+      html = `<div id="empty">近期没有日程。试试添加：<code>今天-19:30-复盘</code></div>`;
+    }
+
+    c.innerHTML = html;
+    flashId = null;
+
+    if (cur) {
+      $("status").innerHTML = `<span class="now">现在：${esc(cur.title)}${cur.end ? "（至 " + esc(cur.end) + "）" : ""}</span>`;
+    } else {
+      $("status").textContent = nxt
+        ? `现在：空闲 · 下一项 ${nxt.start || ""} ${nxt.title}`
+        : "现在：空闲";
+    }
+  }
+
+  function addFromInput() {
+    const raw = input.value;
+    const result = parseLine(raw);
+    if (!result.ok) {
+      hint.className = "";
+      hint.textContent = result.error;
+      input.focus();
+      return;
+    }
+    store.items.push(result.item);
+    saveStore();
+    flashId = result.item.id;
+    input.value = "";
+    hint.className = "ok";
+    hint.textContent = `已添加 · ${result.item.kind === "todo" ? "待办" : "日程"} · ${labelFor(result.item.date)}`;
+    render();
+    // Scroll near the new / current item shortly
+    setTimeout(() => {
+      const el = c.querySelector(`[data-id="${CSS.escape(result.item.id)}"]`);
+      if (el) {
+        const top = el.offsetTop - 40;
+        scrollPos = Math.max(0, top);
+        vp.scrollTop = scrollPos;
+      }
+    }, 50);
+  }
+
+  function openSheet(id) {
+    const it = store.items.find((x) => x.id === id);
+    if (!it) return;
+    selectedId = id;
+    $("sheetTime").textContent = it.kind === "block"
+      ? `${labelFor(it.date)} ${it.start}${it.end ? "–" + it.end : ""}`
+      : `${labelFor(it.date)} · 待办`;
+    $("sheetTitle").textContent = it.title;
+    $("sheetDone").textContent = it.done ? "标为未完成" : "标记完成";
+    $("sheetMask").classList.add("show");
+  }
+
+  function closeSheet() {
+    selectedId = null;
+    $("sheetMask").classList.remove("show");
+  }
+
+  // Events
+  $("addBtn").addEventListener("click", addFromInput);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addFromInput();
+    }
+  });
+  input.addEventListener("input", () => {
+    if (hint.className !== "ok" || hint.textContent.startsWith("已添加")) {
+      hint.className = "ok";
+      hint.textContent = "格式：周几-时间-事件（可选结束时间；无时间=待办）";
+    }
+  });
+
+  c.addEventListener("click", (e) => {
+    const card = e.target.closest(".b");
+    if (!card) {
+      paused ^= true;
+      $("pauseHint").textContent = paused ? "已暂停 · 再点继续" : "点列表暂停滚动";
+      return;
+    }
+    openSheet(card.getAttribute("data-id"));
+  });
+
+  $("sheetCancel").addEventListener("click", closeSheet);
+  $("sheetMask").addEventListener("click", (e) => {
+    if (e.target === $("sheetMask")) closeSheet();
+  });
+  $("sheetDone").addEventListener("click", () => {
+    const it = store.items.find((x) => x.id === selectedId);
+    if (it) {
+      it.done = !it.done;
+      saveStore();
+      render();
+    }
+    closeSheet();
+  });
+  $("sheetDel").addEventListener("click", () => {
+    store.items = store.items.filter((x) => x.id !== selectedId);
+    saveStore();
+    render();
+    closeSheet();
+  });
+
+  // Settings
+  $("settingsBtn").addEventListener("click", () => $("settingsMask").classList.add("show"));
+  $("settingsClose").addEventListener("click", () => $("settingsMask").classList.remove("show"));
+  $("settingsMask").addEventListener("click", (e) => {
+    if (e.target === $("settingsMask")) $("settingsMask").classList.remove("show");
+  });
+
+  $("btnClear").addEventListener("click", () => {
+    if (!confirm("确定清空全部日程和待办？此操作不可撤销。")) return;
+    store = { items: [], updatedAt: "" };
+    saveStore();
+    render();
+    $("settingsMask").classList.remove("show");
+  });
+
+  $("btnExport").addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify({ version: 1, ...store }, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `rollingday-${nowParts().date}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  });
+
+  $("btnImport").addEventListener("click", () => $("importFile").click());
+  $("importFile").addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data || !Array.isArray(data.items)) throw new Error("缺少 items 数组");
+      if (!confirm(`导入 ${data.items.length} 条记录，将覆盖当前数据。继续？`)) return;
+      store = {
+        items: data.items.map((it) => ({
+          id: it.id || uid(),
+          kind: it.kind === "todo" ? "todo" : "block",
+          date: it.date || nowParts().date,
+          start: it.start || "",
+          end: it.end || "",
+          title: String(it.title || "未命名"),
+          done: !!it.done,
+          createdAt: it.createdAt || new Date().toISOString()
+        })),
+        updatedAt: data.updatedAt || new Date().toISOString()
+      };
+      saveStore();
+      render();
+      $("settingsMask").classList.remove("show");
+    } catch (err) {
+      alert("导入失败：" + (err && err.message ? err.message : err));
+    }
+  });
+
+  // Auto-scroll like existing RollingDay
+  setInterval(() => {
+    if (paused) return;
+    const max = Math.max(0, c.scrollHeight - vp.clientHeight + 40);
+    if (max <= 0) { vp.scrollTop = 0; scrollPos = 0; return; }
+    scrollPos += 0.45;
+    if (scrollPos > max + 80) scrollPos = -100;
+    vp.scrollTop = Math.max(0, scrollPos);
+  }, 40);
+
+  // Refresh clock / current highlight
+  setInterval(render, 30000);
+  render();
+
+  // Service worker
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(() => {});
+    });
+  }
+})();
+</script>
+</body>
+</html>
