@@ -1,0 +1,166 @@
+{
+  "updated_at": "2026-10-22 09:55 (Asia/Shanghai)",
+  "current": {
+    "start": "09:45",
+    "end": "10:20",
+    "title": "图书馆自习：高等数学",
+    "kind": "task"
+  },
+  "next": {
+    "start": "10:45",
+    "end": "11:30",
+    "title": "英语听力练习",
+    "kind": "task",
+    "date": "2026-10-22"
+  },
+  "days": [
+    {
+      "date": "2026-10-22",
+      "label": "10/22 周四",
+      "blocks": [
+        {
+          "start": "08:00",
+          "end": "08:30",
+          "title": "早餐与通勤",
+          "kind": "task"
+        },
+        {
+          "start": "08:00",
+          "end": "09:40",
+          "title": "上课：高等数学",
+          "kind": "class"
+        },
+        {
+          "start": "09:45",
+          "end": "10:20",
+          "title": "图书馆自习：高等数学",
+          "kind": "task"
+        },
+        {
+          "start": "10:00",
+          "end": "11:40",
+          "title": "上课：大学英语",
+          "kind": "class"
+        },
+        {
+          "start": "10:45",
+          "end": "11:30",
+          "title": "英语听力练习",
+          "kind": "task"
+        },
+        {
+          "start": "16:30",
+          "end": "17:20",
+          "title": "健身：跑步和拉伸",
+          "kind": "task"
+        },
+        {
+          "start": "19:30",
+          "end": "20:00",
+          "title": "项目会议",
+          "kind": "task"
+        },
+        {
+          "start": "--:--",
+          "end": "",
+          "title": "记得带学生卡和水杯",
+          "kind": "note"
+        }
+      ]
+    },
+    {
+      "date": "2026-10-23",
+      "label": "10/23 周五",
+      "blocks": [
+        {
+          "start": "09:00",
+          "end": "09:50",
+          "title": "复习英语单词",
+          "kind": "task"
+        },
+        {
+          "start": "10:00",
+          "end": "11:40",
+          "title": "课程作业时间",
+          "kind": "task"
+        },
+        {
+          "start": "14:00",
+          "end": "15:00",
+          "title": "项目会议纪要整理",
+          "kind": "task"
+        },
+        {
+          "start": "18:30",
+          "end": "19:20",
+          "title": "健身房力量训练",
+          "kind": "task"
+        },
+        {
+          "start": "20:30",
+          "end": "21:10",
+          "title": "读书：《算法图解》",
+          "kind": "task"
+        }
+      ]
+    }
+  ],
+  "todos": [
+    {
+      "id": "fef63a08c4",
+      "title": "完成高等数学习题第 3 章",
+      "due": "2026-10-22",
+      "priority": "高",
+      "note": "周五课前交",
+      "done": false
+    },
+    {
+      "id": "668760620a",
+      "title": "整理项目会议纪要",
+      "due": "2026-10-23",
+      "priority": "高",
+      "note": "发到项目群",
+      "done": false
+    },
+    {
+      "id": "5c6508447b",
+      "title": "英语听力打卡 20 分钟",
+      "due": "2026-10-22",
+      "priority": "中",
+      "note": "已在早自习完成",
+      "done": true
+    },
+    {
+      "id": "6ff97029a9",
+      "title": "健身房预约",
+      "due": "2026-10-23",
+      "priority": "中",
+      "note": "晚饭后去",
+      "done": false
+    },
+    {
+      "id": "3279081ae4",
+      "title": "阅读《算法图解》第 5 章",
+      "due": "2026-10-24",
+      "priority": "低",
+      "note": "",
+      "done": false
+    },
+    {
+      "id": "9e7b0e2c30",
+      "title": "整理上周读书笔记",
+      "due": "2026-10-20",
+      "priority": "低",
+      "note": "已归档",
+      "done": true
+    },
+    {
+      "id": "c8d0d27db0",
+      "title": "给家人打电话",
+      "due": "2026-10-25",
+      "priority": "低",
+      "note": "",
+      "done": false
+    }
+  ]
+}

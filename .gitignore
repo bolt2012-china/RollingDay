@@ -1,0 +1,34 @@
+# Local RollingDay data and secrets
+todo.md
+week_*.md
+schedule.json
+done.json
+gist.json
+
+# Local sync configuration may contain private gist ids or paths.
+sync/config.json
+sync/gist.json
+*.token
+token.dat
+
+# Windows widget local copies/config
+desktop/windows/config.json
+desktop/windows/token.dat
+
+# Keep sanitized examples.
+!examples/todo.md
+!examples/week_example.md
+!examples/schedule.json
+!examples/done.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
