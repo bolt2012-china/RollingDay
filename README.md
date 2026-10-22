@@ -1,6 +1,6 @@
 # 滚滚日程 RollingDay
 
-> J人福音，P人救星：可实时滚动勾选的个人日程管理器（自用）
+> J人福音，P人救星：可实时滚动勾选的个人日程管理器
 
 RollingDay 是一个轻量的个人日程工具：用 Markdown 写日程和待办，用一个 secret GitHub Gist 同步 `schedule.json` / `done.json`，再在手机网页或 Windows 桌面悬浮小组件里自动滚动查看、实时勾选。
 
