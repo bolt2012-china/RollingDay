@@ -1,0 +1,17 @@
+{
+  "gist_id": "",
+  "gist_owner": "",
+  "timezone": "Asia/Shanghai",
+  "data_dir": "examples",
+  "todo_file": "examples/todo.md",
+  "week_glob": "examples/week_*.md",
+  "days": 7,
+  "publish_web": false,
+  "gist_description": "RollingDay schedule data",
+  "slots": {
+    "1-2": ["08:00", "09:40"],
+    "3-4": ["10:00", "11:40"],
+    "6-8": ["12:55", "15:40"],
+    "9-10": ["16:00", "17:40"]
+  }
+}

@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#111111">
+<title>RollingDay</title>
+<style>
+body{margin:0;background:#111;color:#ddd;font:15px/1.4 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+a{color:#8af}
+#hd{position:sticky;top:0;background:#1b1b1b;padding:8px 12px;border-bottom:1px solid #333;z-index:2}
+#now{font-weight:bold;color:#7fd}
+#nx{color:#aaa;font-size:13px}
+#err{color:#f77;font-size:13px;white-space:pre-wrap}
+#vp{height:calc(100vh - 74px);overflow:hidden}
+h3{margin:12px 12px 4px;color:#8af;font-size:14px}
+.b{margin:3px 10px;padding:6px 9px;border-radius:6px;background:#1e1e1e;border-left:3px solid #555}
+.b.cls{border-color:#a7f}
+.b.cur{background:#14392f;border-color:#3e9}
+.b.past{opacity:.45}
+.t{color:#9ab;font-size:12px}
+.dn{text-decoration:line-through;opacity:.5}
+.b input{float:right;transform:scale(1.4);margin:4px}
+.p高{border-color:#e55}
+.p中{border-color:#eb5}
+.p低{border-color:#6a6}
+#ft{font-size:11px;color:#666;padding:4px 12px}
+</style>
+</head>
+<body>
+<div id="hd">
+  <div id="now">加载中...</div>
+  <div id="nx"></div>
+  <div id="err"></div>
+</div>
+<div id="vp"><div id="c"></div></div>
+<script>
+const LS_GIST = "rollingday.gist";
+const LS_TZ = "rollingday.timezone";
+const LS_TOKEN = "rollingday.githubToken";
+let pos = 0, paused = 0, S = null, DONE = new Set(), pend = {}, lastW = 0;
+
+function query() {
+  return new URLSearchParams(location.search);
+}
+
+function configure() {
+  const q = query();
+  const gistParam = (q.get("gist") || "").trim();
+  const ownerParam = (q.get("owner") || "").trim();
+  const idParam = (q.get("id") || q.get("gist_id") || "").trim();
+  const tzParam = (q.get("tz") || q.get("timezone") || "").trim();
+  if (gistParam) localStorage.setItem(LS_GIST, gistParam);
+  else if (ownerParam && idParam) localStorage.setItem(LS_GIST, ownerParam + "/" + idParam);
+  else if (idParam) localStorage.setItem(LS_GIST, idParam);
+  if (tzParam) localStorage.setItem(LS_TZ, tzParam);
+  return {
+    gist: parseGist(localStorage.getItem(LS_GIST) || ""),
+    timezone: localStorage.getItem(LS_TZ) || "Asia/Shanghai"
+  };
+}
+
+function parseGist(v) {
+  const raw = (v || "").trim().replace(/^https:\/\/gist\.github\.com\//, "");
+  const parts = raw.split("/").filter(Boolean);
+  if (parts.length >= 2) return { owner: parts[0], id: parts[1], label: parts[0] + "/" + parts[1] };
+  if (parts.length === 1) return { owner: "", id: parts[0], label: parts[0] };
+  return { owner: "", id: "", label: "" };
+}
+
+function nowParts(timezone) {
+  const p = {};
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+  for (const x of fmt.formatToParts(new Date())) p[x.type] = x.value;
+  return { date: `${p.year}-${p.month}-${p.day}`, hm: `${p.hour}:${p.minute}` };
+}
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;"
+  })[c]);
+}
+
+function isDone(t) {
+  return t.id in pend ? pend[t.id] : (DONE.has(t.id) || t.done);
+}
+
+async function fetchGistFile(name, token) {
+  const cfg = configure();
+  if (!cfg.gist.id) throw new Error("请在 URL 中加入 ?gist=owner/gist_id，或 ?gist=gist_id");
+  const headers = token ? { Authorization: "Bearer " + token, Accept: "application/vnd.github+json" } : {};
+  if (cfg.gist.owner) {
+    const rawUrl = `https://gist.githubusercontent.com/${encodeURIComponent(cfg.gist.owner)}/${encodeURIComponent(cfg.gist.id)}/raw/${encodeURIComponent(name)}?t=${Date.now()}`;
+    const raw = await fetch(rawUrl, { cache: "no-store", headers: token ? headers : {} });
+    if (raw.ok) return await raw.text();
+  }
+  const api = await fetch(`https://api.github.com/gists/${encodeURIComponent(cfg.gist.id)}?t=${Date.now()}`, {
+    cache: "no-store",
+    headers
+  });
+  if (!api.ok) throw new Error("读取 gist 失败 HTTP " + api.status);
+  const g = await api.json();
+  if (!g.files || !g.files[name]) throw new Error(`gist 中缺少 ${name}`);
+  return g.files[name].content || "";
+}
+
+function render(s) {
+  const cfg = configure();
+  const n = nowParts(cfg.timezone);
+  let h = "", cur = null, nxt = null;
+  for (const d of (s.days || [])) {
+    if (d.date < n.date) continue;
+    h += `<h3>${esc(d.label || d.date)}</h3>`;
+    for (const b of (d.blocks || [])) {
+      let k = "b" + (b.kind === "class" ? " cls" : "");
+      if (d.date === n.date) {
+        if (b.start <= n.hm && n.hm < b.end) {
+          k += " cur"; cur = b;
+        } else if (b.end && b.end <= n.hm) {
+          k += " past";
+        } else if (!nxt && b.kind !== "note") {
+          nxt = b;
+        }
+      } else if (!nxt && !cur && b.kind !== "note") {
+        nxt = { ...b, start: (d.label || d.date) + " " + b.start };
+      }
+      h += `<div class="${k}"><div class="t">${esc(b.start)}${b.end ? "–" + esc(b.end) : ""}</div>${esc(b.title)}</div>`;
+    }
+  }
+  h += "<h3>待办</h3>";
+  for (const t of (s.todos || [])) {
+    const d = isDone(t);
+    h += `<div class="b p${esc(t.priority || "中")}${d ? " dn" : ""}" id="t_${esc(t.id)}">` +
+      `<input type="checkbox" ${d ? "checked" : ""} onclick="event.stopPropagation();tog('${esc(t.id)}',this.checked)">` +
+      `<div class="t">${esc(t.due || "")} · ${esc(t.priority || "中")}</div>${esc(t.title)}</div>`;
+  }
+  h += `<div id="ft">更新于 ${esc(s.updated_at || "")} · gist ${esc(cfg.gist.label || "未配置")} · ` +
+    `<a href="#" onclick="localStorage.removeItem('${LS_TOKEN}');alert('已清除 token');return false">重置 token</a></div>`;
+  document.getElementById("c").innerHTML = h;
+  document.getElementById("now").textContent = cur ? `现在：${cur.title}（至 ${cur.end}）` : "现在：空闲";
+  document.getElementById("nx").textContent = nxt ? `下一项：${nxt.start} ${nxt.title}` : "";
+}
+
+async function tog(id, v) {
+  pend[id] = v;
+  const t = (S.todos || []).find(x => x.id === id);
+  if (!t) return;
+  t.done = false;
+  render(S);
+  const err = document.getElementById("err");
+  err.textContent = "";
+  let token = localStorage.getItem(LS_TOKEN);
+  if (!token) {
+    token = prompt("输入 GitHub token（gist 权限，仅存本机 localStorage）");
+    if (!token) { delete pend[id]; render(S); return; }
+    token = token.trim();
+    localStorage.setItem(LS_TOKEN, token);
+  }
+  try {
+    const cfg = configure();
+    const headers = { Authorization: "Bearer " + token, Accept: "application/vnd.github+json" };
+    const g = await (await fetch(`https://api.github.com/gists/${encodeURIComponent(cfg.gist.id)}`, { headers, cache: "no-store" })).json();
+    if (!g.files) throw new Error(g.message || "读取失败");
+    let d = { done: [] };
+    try { d = JSON.parse((g.files["done.json"] || {}).content || "{\"done\":[]}"); } catch (e) {}
+    d.done = (d.done || []).filter(x => x.id !== id);
+    if (v) d.done.push({ id: id, title: t.title, at: new Date().toISOString() });
+    const r = await fetch(`https://api.github.com/gists/${encodeURIComponent(cfg.gist.id)}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ files: { "done.json": { content: JSON.stringify(d, null, 1) } } })
+    });
+    if (!r.ok) throw new Error("写入失败 HTTP " + r.status);
+    DONE = new Set(d.done.map(x => x.id));
+    lastW = Date.now();
+    delete pend[id];
+    render(S);
+  } catch (e) {
+    delete pend[id];
+    render(S);
+    err.textContent = "勾选失败：" + e.message;
+  }
+}
+
+async function load() {
+  try {
+    const scheduleText = await fetchGistFile("schedule.json");
+    S = JSON.parse(scheduleText);
+    if (Date.now() - lastW > 180000) {
+      try {
+        const doneText = await fetchGistFile("done.json");
+        DONE = new Set((JSON.parse(doneText).done || []).map(x => x.id));
+      } catch (e) {}
+    }
+    document.getElementById("err").textContent = "";
+    render(S);
+  } catch (e) {
+    document.getElementById("nx").textContent = "";
+    document.getElementById("err").textContent = "加载失败：" + e.message;
+  }
+}
+
+load();
+setInterval(load, 60000);
+const vp = document.getElementById("vp");
+vp.onclick = () => paused ^= 1;
+setInterval(() => {
+  if (paused) return;
+  pos += 0.5;
+  if (pos > vp.scrollHeight - vp.clientHeight + 60) pos = -120;
+  vp.scrollTop = Math.max(0, pos);
+}, 40);
+</script>
+</body>
+</html>
