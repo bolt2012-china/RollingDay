@@ -201,7 +201,7 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
 </div>
 
 <div id="vp"><div id="c"></div></div>
-<div id="ft">数据仅存本机 · 离线可用 · <span id="pauseHint">点空白处暂停滚动</span></div>
+<div id="ft">v3 · 数据仅存本机 · 离线可用 · <span id="pauseHint">点空白处暂停滚动</span></div>
 <div id="toast" class="toast"></div>
 
 <!-- Quick actions (tap fallback) -->
@@ -289,6 +289,10 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
   </div>
 </div>
 
+<div id="errBanner" style="display:none;position:fixed;left:0;right:0;top:0;z-index:99;background:#7a1f1f;color:#fff;font-size:13px;padding:8px 12px;white-space:pre-wrap"></div>
+<script>
+window.onerror=function(m,s,l,c){var b=document.getElementById("errBanner");if(b){b.style.display="block";b.textContent="出错了："+m+(l?" (行 "+l+")":"")+"\n请截图反馈，或刷新重试。";}};
+</script>
 <script>
 (function () {
   "use strict";
@@ -364,7 +368,7 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
 
   function saveStore() {
     store.updatedAt = new Date().toISOString();
-    localStorage.setItem(LS_KEY, JSON.stringify(store));
+    try { localStorage.setItem(LS_KEY, JSON.stringify(store)); } catch (e) {}
     syncReminders();
   }
 
@@ -380,7 +384,7 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
     return {
       date: p.year + "-" + p.month + "-" + p.day,
       hm: p.hour + ":" + p.minute,
-      weekday: map[wdFmt.format(new Date())] ?? 0,
+      weekday: map[wdFmt.format(new Date())] || 0,
       year: +p.year
     };
   }
@@ -633,7 +637,7 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
     hint.textContent = "已添加 · " + (result.item.kind === "todo" ? "待办" : "日程") + " · " + labelFor(result.item.date);
     render();
     setTimeout(() => {
-      const el = c.querySelector('[data-id="' + CSS.escape(result.item.id) + '"]');
+      const el = c.querySelector('[data-id="' + result.item.id + '"]');
       if (el) {
         scrollPos = Math.max(0, el.offsetTop - 40);
         vp.scrollTop = scrollPos;
@@ -764,7 +768,7 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
   }
 
   function buildReminderRows() {
-    if (!settings.remindersEnabled || Notification.permission !== "granted") return [];
+    if (!settings.remindersEnabled || notifPerm() !== "granted") return [];
     const rows = [];
     const now = Date.now();
     for (const it of store.items) {
@@ -798,7 +802,7 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
       if (delay > 8 * 60 * 60 * 1000) continue; // only arm near-term locally
       if (delay <= 0) continue;
       const tid = setTimeout(() => {
-        if (Notification.permission === "granted") {
+        if (notifPerm() === "granted") {
           try {
             new Notification(row.title, {
               body: row.body,
@@ -815,13 +819,19 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
     }
   }
 
+  function notifPerm() {
+    try { return ("Notification" in window) ? Notification.permission : "unsupported"; }
+    catch (e) { return "unsupported"; }
+  }
   async function syncReminders() {
-    const rows = buildReminderRows();
-    armLocalTimers(rows);
-    if (swReg) {
-      await postToSw({ type: "sync-reminders", reminders: rows });
-      await postToSw({ type: "check-due", maxMissedMs: MISS_WINDOW_MS });
-    }
+    try {
+      const rows = buildReminderRows();
+      armLocalTimers(rows);
+      if (swReg && typeof MessageChannel === "function") {
+        await postToSw({ type: "sync-reminders", reminders: rows });
+        await postToSw({ type: "check-due", maxMissedMs: MISS_WINDOW_MS });
+      }
+    } catch (e) { /* reminders must never break UI */ }
   }
 
   async function requestNotifPermission() {
@@ -843,12 +853,12 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
   function updateNotifUI() {
     const sw = $("notifSwitch");
     const st = $("notifStatus");
-    const on = settings.remindersEnabled && Notification.permission === "granted";
+    const on = settings.remindersEnabled && notifPerm() === "granted";
     sw.classList.toggle("on", on);
     $("defaultRemind").value = String(settings.defaultRemindMin);
     if (!("Notification" in window)) {
       st.textContent = "浏览器不支持通知";
-    } else if (Notification.permission === "denied") {
+    } else if (notifPerm() === "denied") {
       st.textContent = "系统已拒绝通知权限";
     } else if (on) {
       st.textContent = "已开启 · 默认提前 " + settings.defaultRemindMin + " 分钟";
@@ -874,6 +884,14 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
     baseX: 0
   };
 
+  function ptX(e) {
+    if (typeof e.clientX === "number") return e.clientX;
+    return (e.touches && e.touches[0]) ? e.touches[0].clientX : 0;
+  }
+  function ptY(e) {
+    if (typeof e.clientY === "number") return e.clientY;
+    return (e.touches && e.touches[0]) ? e.touches[0].clientY : 0;
+  }
   function cardFromTouch(target) {
     return target && target.closest ? target.closest(".b") : null;
   }
@@ -885,8 +903,8 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
     const id = card.getAttribute("data-id");
     gesture.id = id;
     gesture.el = card;
-    gesture.startX = e.clientX ?? (e.touches && e.touches[0].clientX) || 0;
-    gesture.startY = e.clientY ?? (e.touches && e.touches[0].clientY) || 0;
+    gesture.startX = ptX(e);
+    gesture.startY = ptY(e);
     gesture.dx = 0;
     gesture.dy = 0;
     gesture.moved = false;
@@ -905,8 +923,8 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
 
   function onPointerMove(e) {
     if (!gesture.el) return;
-    const x = e.clientX ?? (e.touches && e.touches[0].clientX) || 0;
-    const y = e.clientY ?? (e.touches && e.touches[0].clientY) || 0;
+    const x = ptX(e);
+    const y = ptY(e);
     gesture.dx = x - gesture.startX;
     gesture.dy = y - gesture.startY;
     if (!gesture.moved && (Math.abs(gesture.dx) > 8 || Math.abs(gesture.dy) > 8)) {
@@ -959,10 +977,23 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
     gesture.el = null;
   }
 
-  c.addEventListener("pointerdown", onPointerDown);
-  c.addEventListener("pointermove", onPointerMove);
-  c.addEventListener("pointerup", onPointerUp);
-  c.addEventListener("pointercancel", onPointerUp);
+  if (window.PointerEvent) {
+    c.addEventListener("pointerdown", onPointerDown);
+    c.addEventListener("pointermove", onPointerMove);
+    c.addEventListener("pointerup", onPointerUp);
+    c.addEventListener("pointercancel", onPointerUp);
+  } else {
+    var lastTouch = 0;
+    var touchWrap = function (fn) { return function (e) { lastTouch = Date.now(); fn(e); }; };
+    var mouseWrap = function (fn) { return function (e) { if (Date.now() - lastTouch < 800) return; fn(e); }; };
+    c.addEventListener("touchstart", touchWrap(onPointerDown), { passive: true });
+    c.addEventListener("touchmove", touchWrap(onPointerMove), { passive: false });
+    c.addEventListener("touchend", touchWrap(onPointerUp));
+    c.addEventListener("touchcancel", touchWrap(onPointerUp));
+    c.addEventListener("mousedown", mouseWrap(onPointerDown));
+    c.addEventListener("mousemove", mouseWrap(onPointerMove));
+    c.addEventListener("mouseup", mouseWrap(onPointerUp));
+  }
   c.addEventListener("touchmove", (e) => {
     if (gesture.swiping && e.cancelable) e.preventDefault();
   }, { passive: false });
@@ -1015,7 +1046,7 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
   });
 
   $("notifSwitch").addEventListener("click", async () => {
-    if (settings.remindersEnabled && Notification.permission === "granted") {
+    if (settings.remindersEnabled && notifPerm() === "granted") {
       settings.remindersEnabled = false;
       saveSettings();
       await syncReminders();
@@ -1069,7 +1100,7 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
   });
 
   $("btnExport").addEventListener("click", () => {
-    const blob = new Blob([JSON.stringify({ version: 2, settings, ...store }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(Object.assign({ version: 2, settings: settings }, store), null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "rollingday-" + nowParts().date + ".json";

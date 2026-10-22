@@ -1,5 +1,5 @@
 /* RollingDay PWA service worker — bump CACHE when shell changes */
-const CACHE = "rollingday-pwa-v2";
+const CACHE = "rollingday-pwa-v3";
 const DB_NAME = "rollingday-reminders";
 const DB_STORE = "pending";
 const SHELL = [
@@ -30,29 +30,24 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
-
+  const isHtml = req.mode === "navigate" || url.pathname.endsWith("/") || url.pathname.endsWith(".html");
+  if (isHtml) {
+    // Network-first so fixes reach users; fall back to cache offline
+    event.respondWith(
+      fetch(req).then((res) => {
+        if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
+        return res;
+      }).catch(() => caches.match(req).then((r) => r || caches.match("./index.html")))
+    );
+    return;
+  }
   event.respondWith(
     caches.match(req).then((cached) => {
-      const network = fetch(req)
-        .then((res) => {
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then((cache) => cache.put(req, copy));
-          }
-          return res;
-        })
-        .catch(() => cached);
-      if (
-        cached &&
-        (url.pathname.endsWith("/") ||
-          url.pathname.endsWith("index.html") ||
-          url.pathname.endsWith(".js") ||
-          url.pathname.endsWith(".webmanifest") ||
-          url.pathname.endsWith(".png"))
-      ) {
-        return cached;
-      }
-      return network.then((res) => res || cached || new Response("离线不可用", { status: 503 }));
+      const network = fetch(req).then((res) => {
+        if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
+        return res;
+      }).catch(() => cached);
+      return cached || network;
     })
   );
 });
@@ -194,7 +189,7 @@ self.addEventListener("message", (event) => {
       try {
         if (data.type === "schedule-reminder") {
           const result = await scheduleOne(data.reminder);
-          reply({ type: "schedule-result", id: data.reminder && data.reminder.id, ...result });
+          reply(Object.assign({ type: "schedule-result", id: data.reminder && data.reminder.id }, result || {}));
         } else if (data.type === "cancel-reminder") {
           await cancelOne(data.id);
           reply({ type: "cancel-result", id: data.id, ok: true });
@@ -239,5 +234,5 @@ self.addEventListener("notificationclick", (event) => {
 
 // Lightweight periodic due-check while SW is alive
 setInterval(() => {
-  fireDue(2 * 60 * 1000).catch(() => {});
+  try { if (self.indexedDB) fireDue(2 * 60 * 1000).catch(() => {}); } catch (e) {}
 }, 60000);
