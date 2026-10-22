@@ -1,4 +1,13 @@
-Add-Type -AssemblyName PresentationFramework,PresentationCore,WindowsBase
+Add-Type -AssemblyName PresentationFramework,PresentationCore,WindowsBase,System.Windows.Forms,System.Drawing
+[Windows.Forms.Application]::EnableVisualStyles()
+
+# NotifyIcon requires an STA thread; relaunch if needed.
+if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
+  Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @(
+    '-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`""
+  ) -WindowStyle Hidden
+  exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 $ConfigDir = Join-Path $env:APPDATA 'RollingDay'
@@ -51,6 +60,9 @@ $Timezone = Get-TimeZoneInfo $Config.timezone
 $Width = if ($Config.width) { [int]$Config.width } else { 300 }
 $Height = if ($Config.height) { [int]$Config.height } else { 380 }
 $TokenFile = if ($Config.token_file) { [string]$Config.token_file } else { Join-Path $ConfigDir 'token.dat' }
+
+# Icon lives beside this script (install copies schedule.ico into %APPDATA%\RollingDay).
+$IcoPath = if ($Config.icon_path) { [string]$Config.icon_path } else { Join-Path $PSScriptRoot 'schedule.ico' }
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $w = New-Object Windows.Window -Property @{
@@ -149,6 +161,10 @@ $script:lastW = [DateTime]::MinValue
 $script:DONE = @{}
 $script:pos = 0.0
 $script:pause = $false
+$script:reallyExit = $false
+$script:hidTipShown = $false
+$script:ni = $null
+$script:owner = $null
 
 function Load-Schedule {
   try {
@@ -247,8 +263,48 @@ function Toggle-Done($todo, $checked, $checkbox) {
   }
 }
 
+function Show-Win {
+  $w.Show()
+  $w.WindowState = 'Normal'
+  $w.Activate()
+  $w.Topmost = $true
+  if ($script:ni) {
+    $script:ni.Text = '滚滚日程'
+    $script:ni.Visible = $true
+  }
+}
+
+function Hide-Win {
+  $w.Hide()
+  if ($script:ni) {
+    $script:ni.Text = '滚滚日程'
+    $script:ni.Visible = $true
+    if (-not $script:hidTipShown) {
+      $script:hidTipShown = $true
+      try {
+        $script:ni.BalloonTipTitle = '滚滚日程'
+        $script:ni.BalloonTipText = '已隐藏，点这里可重新打开'
+        $script:ni.ShowBalloonTip(4000)
+      } catch {}
+    }
+  }
+}
+
+function Exit-App {
+  $script:reallyExit = $true
+  try {
+    if ($script:ni) {
+      $script:ni.Visible = $false
+      $script:ni.Dispose()
+      $script:ni = $null
+    }
+  } catch {}
+  try { $w.Close() } catch {}
+  try { if ($script:owner) { $script:owner.Close() } } catch {}
+  try { [Windows.Forms.Application]::Exit() } catch {}
+}
+
 $w.Add_MouseLeftButtonDown({ $w.DragMove() })
-$w.Add_MouseRightButtonUp({ $w.Close() })
 $sv.Add_MouseEnter({ $script:pause = $true })
 $sv.Add_MouseLeave({ $script:pause = $false })
 
@@ -268,4 +324,81 @@ $timerScroll.Add_Tick({
 $timerScroll.Start()
 
 $w.Add_Loaded({ Load-Schedule })
-[void]$w.ShowDialog()
+$w.Add_Closing({
+  param($o, $e)
+  if (-not $script:reallyExit) {
+    $e.Cancel = $true
+    Hide-Win
+  }
+})
+
+$wcm = New-Object Windows.Controls.ContextMenu
+$miWH = New-Object Windows.Controls.MenuItem -Property @{ Header = '隐藏' }
+$miWH.Add_Click({ Hide-Win })
+[void]$wcm.Items.Add($miWH)
+$miWX = New-Object Windows.Controls.MenuItem -Property @{ Header = '退出' }
+$miWX.Add_Click({ Exit-App })
+[void]$wcm.Items.Add($miWX)
+$w.ContextMenu = $wcm
+
+# Ensure schedule.ico exists (generate a simple teal calendar if missing).
+if (-not (Test-Path $IcoPath)) {
+  $bmp = New-Object Drawing.Bitmap 32, 32
+  $g = [Drawing.Graphics]::FromImage($bmp)
+  $g.SmoothingMode = 'AntiAlias'
+  $g.Clear([Drawing.Color]::FromArgb(0, 0, 0, 0))
+  $g.FillEllipse((New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(255, 32, 180, 140))), 1, 1, 30, 30)
+  $g.FillRectangle((New-Object Drawing.SolidBrush ([Drawing.Color]::White)), 9, 8, 14, 17)
+  $g.FillRectangle((New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(255, 220, 60, 60))), 9, 8, 14, 4)
+  $g.Dispose()
+  $ic = [Drawing.Icon]::FromHandle($bmp.GetHicon())
+  $fs = [IO.File]::Create($IcoPath)
+  $ic.Save($fs)
+  $fs.Close()
+  $bmp.Dispose()
+}
+
+$script:ico = New-Object Drawing.Icon $IcoPath, 16, 16
+$script:ni = New-Object Windows.Forms.NotifyIcon
+$script:ni.Icon = $script:ico
+$script:ni.Text = '滚滚日程'
+$script:ni.BalloonTipTitle = '滚滚日程'
+$script:ni.BalloonTipIcon = [Windows.Forms.ToolTipIcon]::Info
+$script:ni.Visible = $true
+
+$tcm = New-Object Windows.Forms.ContextMenuStrip
+$miShow = $tcm.Items.Add('显示/打开')
+$miHide = $tcm.Items.Add('隐藏')
+[void]$tcm.Items.Add('-')
+$miExit = $tcm.Items.Add('退出')
+$script:ni.ContextMenuStrip = $tcm
+$miShow.Add_Click({ Show-Win })
+$miHide.Add_Click({ Hide-Win })
+$miExit.Add_Click({ Exit-App })
+$script:ni.Add_MouseDoubleClick({ Show-Win })
+$script:ni.Add_BalloonTipClicked({ Show-Win })
+
+# 1px WinForms owner form keeps NotifyIcon alive across WPF Hide.
+$script:owner = New-Object Windows.Forms.Form
+$script:owner.Text = 'RollingDayTray'
+$script:owner.ShowInTaskbar = $false
+$script:owner.FormBorderStyle = 'FixedToolWindow'
+$script:owner.Opacity = 0
+$script:owner.ShowIcon = $false
+$script:owner.Size = New-Object Drawing.Size 1, 1
+$script:owner.StartPosition = 'Manual'
+$script:owner.Location = New-Object Drawing.Point -4000, -4000
+$script:owner.Add_FormClosing({
+  param($o, $e)
+  if (-not $script:reallyExit) { $e.Cancel = $true }
+})
+
+$w.Show()
+[Windows.Forms.Application]::Run($script:owner)
+
+try {
+  if ($script:ni) {
+    $script:ni.Visible = $false
+    $script:ni.Dispose()
+  }
+} catch {}

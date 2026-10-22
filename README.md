@@ -19,22 +19,24 @@ RollingDay 是一个轻量的个人日程工具：用 Markdown 写日程和待�
 - 手机网页：读取 gist 中的 `schedule.json` / `done.json`，自动滚动今天及之后的日程块和待办。
 - 待办勾选：网页端用 GitHub API PATCH `done.json`，token 仅保存在当前浏览器 `localStorage`。
 - Markdown 同步：`sync/sync_gist.py` 从 `todo.md` 和 `week_*.md` 生成 `schedule.json`，并把远端 `done.json` 合并回 `todo.md`。
-- Windows 小组件：PowerShell + WPF always-on-top 滚动窗口，支持勾选待办；token 用 Windows DPAPI 加密保存在本机。
+- Windows 小组件：PowerShell + WPF always-on-top 滚动窗口，支持勾选待办；系统托盘可隐藏/重新打开；token 用 Windows DPAPI 加密保存在本机。
 - 可配置：gist owner/id、文件路径、时区、课程节次时间都由配置文件、环境变量或网页 URL 参数提供。
 
 ## 目录结构
 
 ```text
-web/index.html                    # 手机/浏览器页面
-desktop/windows/widget.ps1        # Windows WPF 悬浮小组件
-desktop/windows/install_startup.ps1# 安装到开机启动
-sync/sync_gist.py                 # Markdown -> gist 同步脚本
-sync/config.example.json          # 同步脚本配置示例
-examples/todo.md                  # 待办 Markdown 格式示例
-examples/week_example.md          # 周日程 Markdown 格式示例
-examples/schedule.json            # 本地 demo 日程数据
-examples/done.json                # 本地 demo 勾选数据
-docs/demo-*.mp4 / docs/demo-*.gif # demo 录屏
+web/index.html                       # 手机/浏览器页面
+desktop/windows/widget.ps1           # Windows WPF 悬浮小组件（含托盘）
+desktop/windows/install_startup.ps1  # 安装到开机启动（-STA + 图标）
+desktop/windows/schedule.ico         # 托盘/快捷方式图标（青绿日历）
+sync/sync_gist.py                    # Markdown -> gist 同步脚本
+sync/config.example.json             # 同步脚本配置示例
+examples/todo.md                     # 待办 Markdown 格式示例
+examples/week_example.md             # 周日程 Markdown 格式示例
+examples/schedule.json               # 本地 demo 日程数据
+examples/done.json                   # 本地 demo 勾选数据
+docs/demo-*.mp4 / docs/demo-*.gif    # demo 录屏
+docs/demo-tray.png                   # 托盘隐藏/重新打开效果示意
 ```
 
 ## 工作方式
@@ -201,11 +203,30 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 安装脚本会：
 
-1. 复制 `widget.ps1` 到 `%APPDATA%\RollingDay\widget.ps1`；
+1. 复制 `widget.ps1` 与 `schedule.ico` 到 `%APPDATA%\RollingDay\`；
 2. 写入 `%APPDATA%\RollingDay\config.json`；
-3. 创建 Startup 快捷方式 `RollingDay.lnk`。
+3. 创建 Startup 快捷方式 `RollingDay.lnk`（带 `-STA`，托盘 NotifyIcon 需要 STA 线程）。
 
 首次勾选待办时，小组件会提示输入 GitHub token，并用 Windows DPAPI 加密保存到 `%APPDATA%\RollingDay\token.dat`。
+
+#### 隐藏 / 重新打开（系统托盘）
+
+小组件启动后会在任务栏通知区域显示青绿日历图标，tooltip 为「滚滚日程」。
+
+![托盘隐藏/重新打开效果示意](docs/demo-tray.png)
+
+> 上图为 **效果示意**（Pillow 生成的 mock），不是真实桌面截图。
+
+- 右键托盘图标：`显示/打开` · `隐藏` · `退出`
+- 双击图标，或点击「已隐藏」气泡提示，可重新打开窗口
+- 关闭窗口（或窗口右键「隐藏」）**不会退出进程**，只是隐藏到托盘；选「退出」才会结束
+- 若图标落在任务栏 `^` 溢出区，可把它拖到通知区域常驻，方便点开
+
+也可直接运行（同样建议加 `-STA`）：
+
+```powershell
+powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\desktop\windows\widget.ps1
+```
 
 ## 配置项
 
@@ -240,6 +261,8 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 }
 ```
 
+可选：`icon_path` 指向自定义 `.ico`；默认使用脚本同目录的 `schedule.ico`。
+
 ## 安全说明
 
 - 不要提交 GitHub token、真实 gist id、真实日程、真实路径或个人信息。
@@ -261,7 +284,7 @@ Minimal setup:
 4. Copy `sync/config.example.json` to `sync/config.json` and point it to your data directory and gist.
 5. Run `python3 sync/sync_gist.py --config sync/config.json`.
 6. Open `web/index.html?gist=<gist_owner>/<gist_id>&tz=Asia/Shanghai`.
-7. On Windows, run `desktop/windows/install_startup.ps1 -Gist "<gist_owner>/<gist_id>"`.
+7. On Windows, run `desktop/windows/install_startup.ps1 -Gist "<gist_owner>/<gist_id>"` (installs with `-STA` and tray icon; hide/reopen via the teal calendar NotifyIcon).
 
 ## License
 
