@@ -84,13 +84,15 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
 .b {
   position: relative; z-index: 1; padding: 10px 12px; border-radius: 10px;
   background: var(--card); border-left: 3px solid #555; cursor: pointer;
-  transition: transform .18s ease, background .15s, opacity .15s;
+  transition: transform .18s ease, background .15s;
   -webkit-tap-highlight-color: transparent; user-select: none;
 }
 .b.dragging { transition: none; }
 .b.cur { background: var(--cur-bg); border-color: var(--cur-border); box-shadow: 0 0 0 1px rgba(62,153,153,.25); }
-.b.past { opacity: 0.42; }
-.b.done { opacity: 0.45; text-decoration: line-through; }
+/* darken instead of opacity so swipe buttons behind never show through */
+.b.past { background: #161616; color: #6a6a6a; border-left-color: #333; }
+.b.past .t, .b.done .t { color: #4f5a63; }
+.b.done { background: #161616; color: #6a6a6a; border-left-color: #333; text-decoration: line-through; }
 .b.todo { border-color: #eb5; }
 .b .t { color: #9ab; font-size: 12px; margin-bottom: 2px; }
 .b .title { word-break: break-word; }
@@ -203,7 +205,7 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
 </div>
 
 <div id="vp"><div id="c"></div></div>
-<div id="ft">v4 · 数据仅存本机 · 离线可用 · 手指可上下滑动</div>
+<div id="ft">v5 · 数据仅存本机 · 离线可用 · 手指可上下滑动</div>
 <div id="scrollHint">已暂停自动滚动</div>
 <div id="toast" class="toast"></div>
 

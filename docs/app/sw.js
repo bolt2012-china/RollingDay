@@ -1,5 +1,5 @@
 /* RollingDay PWA service worker — bump CACHE when shell changes */
-const CACHE = "rollingday-pwa-v4";
+const CACHE = "rollingday-pwa-v5";
 const DB_NAME = "rollingday-reminders";
 const DB_STORE = "pending";
 const SHELL = [
