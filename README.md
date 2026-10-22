@@ -51,13 +51,15 @@ RollingDay 是一个轻量的个人日程工具：用 Markdown 写日程和待�
 
 - `周几-开始-事件` 或 `周几-开始-结束-事件`；`今天` / `明天` 也可当周几。
 - 没有时间的行当作待办。
-- 点列表项可「完成 / 删除」；设置（⚙）可导出/导入 JSON 或清空数据。
+- **手势：** 轻点标记完成；左滑露出「编辑 / 删除」（删除需确认）；长按打开编辑（星期、时间、标题、提前提醒）。
+- **提醒（尽力而为）：** 设置里开启「日程提醒」并允许通知。默认可提前 0/5/10/15/30 分钟；单条可覆盖。实现上优先用 Chrome 的 Notification Triggers（`TimestampTrigger`），否则靠 Service Worker + IndexedDB 待发队列，以及页面打开时的定时器/补发。**不能写入系统闹钟**；Android Chrome 较稳，iOS Safari/PWA 通知能力有限。
+- 设置（⚙）还可导出/导入 JSON 或清空数据。更新后请硬刷新或重新打开主屏幕图标，以便加载新版 Service Worker。
 
 > 若仍想用 secret gist 跨设备同步，请继续用下方的 `web/index.html` + `sync/sync_gist.py` 流程。
 
 ## 功能
 
-- 手机 PWA：一行输入日程，本机存储、可离线、可添加到主屏幕（见上一节）。
+- 手机 PWA：一行输入日程，本机存储、可离线、可添加到主屏幕；支持浏览器通知提醒与左滑/长按编辑（见上一节）。
 - 手机网页（gist 版）：读取 gist 中的 `schedule.json` / `done.json`，自动滚动今天及之后的日程块和待办。
 - 待办勾选：网页端用 GitHub API PATCH `done.json`，token 仅保存在当前浏览器 `localStorage`。
 - Markdown 同步：`sync/sync_gist.py` 从 `todo.md` 和 `week_*.md` 生成 `schedule.json`，并把远端 `done.json` 合并回 `todo.md`。
