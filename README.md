@@ -245,6 +245,19 @@ web/index.html?demo=1&tz=Asia/Shanghai
 
 在 iOS Safari / Android Chrome 中打开网页后，选择“添加到主屏幕”即可当作轻量 PWA 使用。
 
+### 订阅到手机日历
+
+每次同步还会向 gist 写入 `schedule.ics`（RFC 5545），包含过去 7 天到未来的所有定时日程，每项带两个提醒（提前 10 分钟、开始时）；有截止日期的待办会作为全天事件，当天 9:00 提醒。由手机系统日历在后台提醒，无需打开网页。
+
+订阅地址（secret gist 的 raw 链接，持有链接即可读取，请勿公开）：
+
+```text
+https://gist.githubusercontent.com/<gist_owner>/<gist_id>/raw/schedule.ics
+webcal://gist.githubusercontent.com/<gist_owner>/<gist_id>/raw/schedule.ics
+```
+
+在手机系统日历中：日历 → 设置/管理日历 → 订阅日历/添加订阅（各品牌名称不同），粘贴上面的地址。若系统日历不支持按 URL 订阅，可在浏览器中打开 `.ics` 链接一次性导入（不会自动更新）。日历刷新频率由手机决定（feed 建议 1 小时）。
+
 ### 7. 安装 Windows 悬浮小组件
 
 在 PowerShell 中运行：

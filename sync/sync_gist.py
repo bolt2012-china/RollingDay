@@ -305,6 +305,58 @@ def edit_key(e):
 # ---------------------------------------------------------------------------
 
 
+# ---- ICS calendar feed (schedule.ics) ---------------------------------------
+def _ics_esc(s):
+    return str(s).replace("\\","\\\\").replace(";","\\;").replace(",","\\,").replace("\r\n","\\n").replace("\n","\\n").replace("\r","\\n")
+def _ics_fold(line):
+    b=line.encode("utf-8");out=[];cur=b"";lim=75
+    for ch in line:
+        e=ch.encode("utf-8")
+        if len(cur)+len(e)>lim:out.append(cur);cur=b" ";lim=75
+        cur+=e
+    out.append(cur);return b"\r\n".join(out).decode("utf-8")
+def build_ics(days,todos,now,name="滚滚日程",past_days=7,tzid="Asia/Shanghai"):
+    """days: {iso_date:{"blocks":[{id,start,end,title,kind}]}}; todos: [{id,title,due,done}]"""
+    # Fixed-offset VTIMEZONE (exact for zones without DST such as Asia/Shanghai).
+    o=int(now.utcoffset().total_seconds()//60);off="%s%02d%02d"%("+" if o>=0 else "-",abs(o)//60,abs(o)%60)
+    stamp=now.astimezone(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    lo=(now.date()-datetime.timedelta(days=past_days)).isoformat()
+    L=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//RollingDay//schedule//ZH","CALSCALE:GREGORIAN","METHOD:PUBLISH",
+       "X-WR-CALNAME:"+_ics_esc(name),"X-WR-TIMEZONE:"+tzid,"REFRESH-INTERVAL;VALUE=DURATION:PT1H","X-PUBLISHED-TTL:PT1H",
+       "BEGIN:VTIMEZONE","TZID:"+tzid,"X-LIC-LOCATION:"+tzid,"BEGIN:STANDARD","TZOFFSETFROM:"+off,"TZOFFSETTO:"+off,
+       "TZNAME:"+(now.tzname() or "LOCAL"),"DTSTART:19700101T000000","END:STANDARD","END:VTIMEZONE"]
+    def alarms(title,trig1,trig2):
+        return ["BEGIN:VALARM","ACTION:DISPLAY","TRIGGER:"+trig1,"DESCRIPTION:"+_ics_esc("10分钟后："+title),"END:VALARM",
+                "BEGIN:VALARM","ACTION:DISPLAY","TRIGGER:"+trig2,"DESCRIPTION:"+_ics_esc("现在开始："+title),"END:VALARM"]
+    n=0
+    for k in sorted(days):
+        if k<lo:continue
+        dt=datetime.date.fromisoformat(k)
+        for b in days[k].get("blocks",[]):
+            if b.get("done") or b.get("deleted"):continue
+            m=re.match(r"^(\d{1,2}):(\d{2})$",b.get("start") or "")
+            if not m:continue
+            s=datetime.datetime.combine(dt,datetime.time(int(m[1]),int(m[2])))
+            me=re.match(r"^(\d{1,2}):(\d{2})$",b.get("end") or "")
+            e=datetime.datetime.combine(dt,datetime.time(int(me[1]),int(me[2]))) if me else s+datetime.timedelta(minutes=30)
+            if e<=s:e=e+datetime.timedelta(days=1) if me else s+datetime.timedelta(minutes=30)
+            L+=["BEGIN:VEVENT","UID:%s@rollingday"%b["id"],"DTSTAMP:"+stamp,
+                "DTSTART;TZID="+tzid+":"+s.strftime("%Y%m%dT%H%M%S"),"DTEND;TZID="+tzid+":"+e.strftime("%Y%m%dT%H%M%S"),
+                "SUMMARY:"+_ics_esc(b["title"])]+alarms(b["title"],"-PT10M","PT0S")+["END:VEVENT"];n+=1
+    for t in todos or []:
+        if t.get("done") or t.get("deleted"):continue
+        m=re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})",t.get("due") or "")
+        if not m:continue
+        d=datetime.date(int(m[1]),int(m[2]),int(m[3]))
+        if d.isoformat()<lo:continue
+        # all-day event; alarms relative to 00:00 start: 08:50 and 09:00 that day
+        L+=["BEGIN:VEVENT","UID:todo-%s@rollingday"%t["id"],"DTSTAMP:"+stamp,"DTSTART;VALUE=DATE:"+d.strftime("%Y%m%d"),
+            "DTEND;VALUE=DATE:"+(d+datetime.timedelta(days=1)).strftime("%Y%m%d"),"SUMMARY:"+_ics_esc("截止："+t["title"]),"TRANSP:TRANSPARENT"
+            ]+alarms("截止："+t["title"],"PT8H50M","PT9H")+["END:VEVENT"];n+=1
+    L.append("END:VCALENDAR")
+    return "".join(_ics_fold(x)+"\r\n" for x in L),n
+# ---------------------------------------------------------------------------
+
 def parse_week(path: Path, default_year: int, slots: dict[str, tuple[str, str]]) -> dict[str, dict[str, Any]]:
     year = year_from_path(path, default_year)
     days: dict[str, dict[str, Any]] = {}
@@ -433,7 +485,9 @@ def build_schedule(cfg: dict[str, Any], apply: bool = True) -> tuple[dict[str, A
         "days": day_list,
         "todos": todos,
     }
-    return schedule, new_done, has_done, {"processed": processed, "has_edits": state["has_edits"]}
+    ics, ics_events = build_ics(days, todos, now, name=cfg.get("calendar_name", "滚滚日程"), tzid=timezone)
+    return schedule, new_done, has_done, {"processed": processed, "has_edits": state["has_edits"],
+                                          "ics": ics, "ics_events": ics_events}
 
 
 def sync(cfg: dict[str, Any], schedule: dict[str, Any], done: list[dict[str, Any]], has_done: bool, config_path: Path | None,
@@ -445,10 +499,12 @@ def sync(cfg: dict[str, Any], schedule: dict[str, Any], done: list[dict[str, Any
     files = {
         "schedule.json": {"content": json.dumps(schedule, ensure_ascii=False, indent=1)},
     }
+    edit_state = edit_state or {}
+    if edit_state.get("ics"):
+        files["schedule.ics"] = {"content": edit_state["ics"]}
     if not has_done:
         files["done.json"] = {"content": json.dumps({"done": done}, ensure_ascii=False, indent=1)}
 
-    edit_state = edit_state or {}
     if gist_id and edit_state.get("processed"):
         # Re-read just before writing so edits queued in the meantime survive.
         latest = load_gist_state(gist_id, token)["edits"]
