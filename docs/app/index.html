@@ -205,7 +205,7 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
 </div>
 
 <div id="vp"><div id="c"></div></div>
-<div id="ft">v6 · 数据仅存本机 · 离线可用 · 手指可上下滑动</div>
+<div id="ft">v7 · 数据仅存本机 · 离线可用 · 手指可上下滑动</div>
 <div id="scrollHint">已暂停自动滚动</div>
 <div id="toast" class="toast"></div>
 
@@ -293,10 +293,12 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
     <p class="note">建议「添加到主屏幕」安装后使用；后台/锁屏时能否准时响取决于系统，网页无法设置真正的闹钟。</p>
     <div class="settings-actions" style="margin-top:8px">
       <button type="button" id="btnTestNotif">发送测试通知</button>
+      <button type="button" id="btnExportIcs">导出到系统日历</button>
       <button type="button" id="btnExport">导出 JSON</button>
       <button type="button" id="btnImport">导入 JSON</button>
       <button type="button" class="danger" id="btnClear">清空全部数据…</button>
     </div>
+    <p class="note" id="icsExportNote">华为 / HarmonyOS 系统日历通常<strong>无法按 URL 订阅</strong>：请下载 <code>rollingday.ics</code> 后用「日历」打开导入。日程有改动时请重新导出；导入前先删除旧的「滚滚日程」事件，以免重复。</p>
     <button type="button" class="close" id="settingsClose">关闭</button>
     <input type="file" id="importFile" accept="application/json,.json" hidden>
   </div>
@@ -1217,6 +1219,223 @@ function rdAutoScroll(vp, opts) {
     saveStore();
     render();
     $("settingsMask").classList.remove("show");
+  });
+
+  function icsEsc(s) {
+    return String(s == null ? "" : s)
+      .replace(/\\/g, "\\\\")
+      .replace(/;/g, "\\;")
+      .replace(/,/g, "\\,")
+      .replace(/\r\n/g, "\\n")
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\n");
+  }
+
+  function icsFold(line) {
+    var out = [];
+    var cur = "";
+    var lim = 75;
+    var i, ch, enc, curBytes, encBytes;
+    function utf8Len(str) {
+      var n = 0, j, c;
+      for (j = 0; j < str.length; j++) {
+        c = str.charCodeAt(j);
+        if (c < 0x80) n += 1;
+        else if (c < 0x800) n += 2;
+        else if (c >= 0xD800 && c <= 0xDBFF) { n += 4; j++; }
+        else n += 3;
+      }
+      return n;
+    }
+    for (i = 0; i < line.length; i++) {
+      ch = line.charAt(i);
+      if (ch.charCodeAt(0) >= 0xD800 && ch.charCodeAt(0) <= 0xDBFF && i + 1 < line.length) {
+        ch += line.charAt(++i);
+      }
+      encBytes = utf8Len(ch);
+      curBytes = utf8Len(cur);
+      if (curBytes + encBytes > lim) {
+        out.push(cur);
+        cur = " " + ch;
+        lim = 74;
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out.join("\r\n");
+  }
+
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+
+  function fmtStampUTC(d) {
+    return d.getUTCFullYear() +
+      pad2(d.getUTCMonth() + 1) +
+      pad2(d.getUTCDate()) + "T" +
+      pad2(d.getUTCHours()) +
+      pad2(d.getUTCMinutes()) +
+      pad2(d.getUTCSeconds()) + "Z";
+  }
+
+  function fmtLocal(dateStr, hm) {
+    var p = dateStr.split("-");
+    var t = (hm || "00:00").split(":");
+    return p[0] + p[1] + p[2] + "T" + pad2(+t[0]) + pad2(+t[1]) + "00";
+  }
+
+  function fmtDateOnly(dateStr) {
+    var p = dateStr.split("-");
+    return p[0] + p[1] + p[2];
+  }
+
+  function buildIcs(items, opts) {
+    opts = opts || {};
+    var name = opts.name || "滚滚日程";
+    var tzid = opts.tzid || TZ;
+    var pastDays = opts.pastDays != null ? opts.pastDays : 7;
+    var now = opts.now || new Date();
+    var today = opts.today || nowParts().date;
+    var lo = addDays(today, -pastDays);
+    var stamp = fmtStampUTC(now);
+    var L = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//RollingDay//schedule//ZH",
+      "CALSCALE:GREGORIAN",
+      "METHOD:PUBLISH",
+      "X-WR-CALNAME:" + icsEsc(name),
+      "X-WR-TIMEZONE:" + tzid,
+      "BEGIN:VTIMEZONE",
+      "TZID:" + tzid,
+      "X-LIC-LOCATION:" + tzid,
+      "BEGIN:STANDARD",
+      "TZOFFSETFROM:+0800",
+      "TZOFFSETTO:+0800",
+      "TZNAME:CST",
+      "DTSTART:19700101T000000",
+      "END:STANDARD",
+      "END:VTIMEZONE"
+    ];
+    function alarms(title, trig1, trig2) {
+      return [
+        "BEGIN:VALARM", "ACTION:DISPLAY", "TRIGGER:" + trig1,
+        "DESCRIPTION:" + icsEsc("10分钟后：" + title), "END:VALARM",
+        "BEGIN:VALARM", "ACTION:DISPLAY", "TRIGGER:" + trig2,
+        "DESCRIPTION:" + icsEsc("现在开始：" + title), "END:VALARM"
+      ];
+    }
+    var n = 0;
+    var list = (items || []).slice().sort(function (a, b) {
+      var da = a.date || "";
+      var db = b.date || "";
+      if (da !== db) return da < db ? -1 : 1;
+      return String(a.start || "").localeCompare(String(b.start || ""));
+    });
+    var i, it, start, end, due, title;
+    for (i = 0; i < list.length; i++) {
+      it = list[i];
+      if (!it || it.done) continue;
+      if ((it.date || "") < lo) continue;
+      if (it.kind === "block") {
+        start = normalizeTime(it.start);
+        if (!start) continue;
+        end = normalizeTime(it.end);
+        if (!end) {
+          // default +30 min
+          var parts = start.split(":").map(Number);
+          var mins = parts[0] * 60 + parts[1] + 30;
+          end = pad2(Math.floor(mins / 60) % 24) + ":" + pad2(mins % 60);
+        } else if (end <= start) {
+          continue;
+        }
+        title = it.title || "未命名";
+        L = L.concat([
+          "BEGIN:VEVENT",
+          "UID:" + it.id + "@rollingday",
+          "DTSTAMP:" + stamp,
+          "DTSTART;TZID=" + tzid + ":" + fmtLocal(it.date, start),
+          "DTEND;TZID=" + tzid + ":" + fmtLocal(it.date, end),
+          "SUMMARY:" + icsEsc(title)
+        ]).concat(alarms(title, "-PT10M", "PT0S")).concat(["END:VEVENT"]);
+        n += 1;
+      } else if (it.kind === "todo") {
+        due = it.date || "";
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) continue;
+        title = "截止：" + (it.title || "未命名");
+        L = L.concat([
+          "BEGIN:VEVENT",
+          "UID:todo-" + it.id + "@rollingday",
+          "DTSTAMP:" + stamp,
+          "DTSTART;VALUE=DATE:" + fmtDateOnly(due),
+          "DTEND;VALUE=DATE:" + fmtDateOnly(addDays(due, 1)),
+          "SUMMARY:" + icsEsc(title),
+          "TRANSP:TRANSPARENT"
+        ]).concat(alarms(title, "PT8H50M", "PT9H")).concat(["END:VEVENT"]);
+        n += 1;
+      }
+    }
+    L.push("END:VCALENDAR");
+    var body = "";
+    for (i = 0; i < L.length; i++) body += icsFold(L[i]) + "\r\n";
+    return { text: body, count: n };
+  }
+
+  window.__rollingdayBuildIcs = buildIcs;
+
+  function downloadTextFile(filename, text, mime) {
+    var blob = new Blob([text], { type: mime || "text/calendar;charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () {
+      try { document.body.removeChild(a); } catch (e) {}
+      URL.revokeObjectURL(url);
+    }, 2000);
+    return blob;
+  }
+
+  async function exportIcs() {
+    var result = buildIcs(store.items);
+    if (!result.count) {
+      toast("没有可导出的日程（已完成的会跳过）");
+      return;
+    }
+    var blob = downloadTextFile("rollingday.ics", result.text, "text/calendar;charset=utf-8");
+    toast("已导出 " + result.count + " 项 · rollingday.ics");
+    // Some Android browsers ignore <a download>; try Web Share with File, else tip.
+    var shared = false;
+    var ua = navigator.userAgent || "";
+    var mobile = /Android|iPhone|iPad|iPod/i.test(ua);
+    // On phones, download often fails silently — offer Web Share with the same file.
+    if (mobile) {
+      try {
+        if (typeof File !== "undefined" && navigator.share) {
+          var file = new File([blob], "rollingday.ics", { type: "text/calendar" });
+          var payload = { files: [file], title: "滚滚日程", text: "导入到系统日历" };
+          if (!navigator.canShare || navigator.canShare(payload)) {
+            await navigator.share(payload);
+            shared = true;
+          }
+        }
+      } catch (e) {
+        // cancelled or unsupported
+      }
+    }
+    if (!shared) {
+      setTimeout(function () {
+        toast("若未自动下载：长按保存文件，再用日历打开");
+      }, 2200);
+    }
+  }
+
+  $("btnExportIcs").addEventListener("click", function () {
+    exportIcs().catch(function (e) {
+      toast("导出失败：" + (e && e.message ? e.message : e));
+    });
   });
 
   $("btnExport").addEventListener("click", () => {
