@@ -166,19 +166,58 @@ $script:hidTipShown = $false
 $script:ni = $null
 $script:owner = $null
 
+function New-ItemText($text, $color, $background = $null) {
+  $tb = New-Object Windows.Controls.TextBlock -Property @{
+    Text = $text
+    Foreground = $color
+    TextWrapping = 'Wrap'
+    FontFamily = 'Microsoft YaHei'
+    FontSize = 12
+    Padding = '3,1,3,1'
+  }
+  if ($background) { $tb.Background = $background }
+  return $tb
+}
+
 function Load-Schedule {
   try {
     $schedule = Read-GistFile 'schedule.json' | ConvertFrom-Json
+    if (((Get-Date) - $script:lastW).TotalMinutes -gt 3) {
+      try {
+        $doneJson = Read-GistFile 'done.json' | ConvertFrom-Json
+        $script:DONE = @{}
+        foreach ($x in $doneJson.done) { $script:DONE[$x.id] = 1 }
+      } catch {}
+    }
+    if (((Get-Date) - $script:editsW).TotalMinutes -gt 3) {
+      try {
+        $editsJson = Read-GistFile 'edits.json' | ConvertFrom-Json
+        $script:EDITS = @($editsJson.edits | Where-Object { $_ })
+      } catch {}
+    }
+    $script:S = $schedule
+    # Don't rebuild the list under an active drag or an open swipe.
+    if ($script:gs -or $script:openRow) { return }
+    Render-Schedule $schedule
+  } catch {
+    $hd.Text = "加载失败：$($_.Exception.Message)"
+  }
+}
+
+function Render-Schedule($schedule) {
     $now = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $Timezone)
     $today = $now.ToString('yyyy-MM-dd')
     $hm = $now.ToString('HH:mm')
+    $script:openRow = $null
+    $script:gs = $null
     $sp.Children.Clear()
+    $editMap = RD-EditMap
     $cur = $null
     $nx = $null
     foreach ($d in $schedule.days) {
       if ($d.date -lt $today) { continue }
       Add-Line $d.label '#88aaff' $true
-      foreach ($b in $d.blocks) {
+      foreach ($b in (RD-Overlay $d.blocks 'block' $editMap)) {
         $color = '#dddddd'
         $bg = $null
         if ($d.date -eq $today -and $b.start -le $hm -and $hm -lt $b.end) {
@@ -191,19 +230,14 @@ function Load-Schedule {
           $nx = $b
         }
         if ($b.kind -eq 'class' -and $color -eq '#dddddd') { $color = '#c8a8ff' }
-        Add-Line ("{0}-{1} {2}" -f $b.start, $b.end, $b.title) $color $false $bg
+        $tb = New-ItemText ("{0}-{1} {2}" -f $b.start, $b.end, $b.title) $color $bg
+        if ($b.pend) { $tb.FontStyle = 'Italic' }
+        if ($b.id) { Add-Item $tb $b 'block' } else { $tb.Margin = '0,1,0,1'; [void]$sp.Children.Add($tb) }
       }
     }
     Add-Line '待办' '#88aaff' $true
-    if (((Get-Date) - $script:lastW).TotalMinutes -gt 3) {
-      try {
-        $doneJson = Read-GistFile 'done.json' | ConvertFrom-Json
-        $script:DONE = @{}
-        foreach ($x in $doneJson.done) { $script:DONE[$x.id] = 1 }
-      } catch {}
-    }
     $priorityColors = @{ '高' = '#ff7777'; '中' = '#eebb55'; '低' = '#88cc88' }
-    foreach ($t in $schedule.todos) {
+    foreach ($t in (RD-Overlay $schedule.todos 'todo' $editMap)) {
       $color = $priorityColors[[string]$t.priority]
       if (-not $color) { $color = '#dddddd' }
       $done = $script:DONE.ContainsKey($t.id) -or $t.done
@@ -219,15 +253,13 @@ function Load-Schedule {
         FontSize = 12
       }
       if ($done) { $cb.Content.TextDecorations = [Windows.TextDecorations]::Strikethrough }
+      if ($t.pend) { $cb.Content.FontStyle = 'Italic' }
       $cb.Tag = $t
       $cb.Add_Click({ param($o, $e) Toggle-Done $o.Tag ([bool]$o.IsChecked) $o })
-      [void]$sp.Children.Add($cb)
+      Add-Item $cb $t 'todo'
     }
-    Add-Line ("更新于 " + $schedule.updated_at) '#666666'
+    Add-Line ("更新于 " + $schedule.updated_at + " · 右键/长按编辑 · 左拖出按钮") '#666666'
     $hd.Text = $(if ($cur) { "现在：$($cur.title)（至 $($cur.end)）" } else { '现在：空闲' }) + $(if ($nx) { "`n下一项：$($nx.start) $($nx.title)" } else { '' })
-  } catch {
-    $hd.Text = "加载失败：$($_.Exception.Message)"
-  }
 }
 
 function Toggle-Done($todo, $checked, $checkbox) {
@@ -262,6 +294,306 @@ function Toggle-Done($todo, $checked, $checkbox) {
     $checkbox.Content.TextDecorations = $(if (-not $checked) { [Windows.TextDecorations]::Strikethrough } else { $null })
   }
 }
+
+function RD-Token { Get-Token }
+function RD-Client($tok) { New-Client $tok }
+$RdApi = "https://api.github.com/gists/$($Gist.id)"
+# ---- RollingDay item gestures + edits.json write-back ---------------------
+# Right-click or long left-press (~0.5s) on an item opens a 编辑/删除 menu;
+# dragging an item left reveals 编辑/删除 buttons. Edits are shown at once
+# (optimistic) and appended to edits.json in the gist; sync_gist.py applies
+# them to the markdown files and clears them.
+$script:EDITS = @()
+$script:editsW = [DateTime]::MinValue
+$script:S = $null
+$script:gs = $null
+$script:openRow = $null
+$RdActW = 112
+$script:lpTimer = New-Object Windows.Threading.DispatcherTimer
+$script:lpTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+$script:lpTimer.Add_Tick({
+  $script:lpTimer.Stop()
+  $g = $script:gs
+  if (-not $g -or $g.moved -or $g.swiping) { return }
+  $g.fired = $true
+  [void]$g.row.CaptureMouse()   # steal capture so a held checkbox doesn't toggle on release
+  $g.row.ReleaseMouseCapture()
+  RD-OpenMenu $g.row
+})
+
+function RD-Fields($o) {
+  $h = @{}
+  if ($null -eq $o) { return $h }
+  if ($o -is [hashtable]) { foreach ($k in $o.Keys) { $h[$k] = $o[$k] }; return $h }
+  foreach ($p in $o.PSObject.Properties) { $h[$p.Name] = $p.Value }
+  return $h
+}
+
+function RD-Merge($list, $e) {
+  $out = @(); $prev = $null
+  foreach ($x in @($list)) {
+    if (-not $x) { continue }
+    if ($x.id -eq $e.id -and $x.type -eq $e.type) { $prev = $x } else { $out += $x }
+  }
+  if ($prev -and $prev.action -eq 'edit' -and $e.action -eq 'edit') {
+    $f = RD-Fields $prev.fields
+    $nf = RD-Fields $e.fields
+    foreach ($k in $nf.Keys) { $f[$k] = $nf[$k] }
+    $e.fields = $f
+  }
+  $out += $e
+  return ,$out
+}
+
+function RD-EditMap {
+  $m = @{}
+  foreach ($e in @($script:EDITS)) { if ($e -and $e.id) { $m[[string]$e.id] = $e } }
+  return $m
+}
+
+function RD-Overlay($items, $type, $map) {
+  $out = @()
+  foreach ($it in @($items)) {
+    if (-not $it) { continue }
+    $e = $null
+    if ($it.id) { $e = $map[[string]$it.id] }
+    if ($e -and $e.type -and $e.type -ne $type) { $e = $null }
+    if (-not $e) { $out += $it; continue }
+    if ($e.action -eq 'delete') { continue }
+    $c = $it.PSObject.Copy()
+    $f = RD-Fields $e.fields
+    $keys = if ($type -eq 'todo') { @('title', 'due', 'priority', 'note') } else { @('title', 'start', 'end') }
+    foreach ($k in $keys) {
+      if ($f.ContainsKey($k) -and ($type -eq 'todo' -or $f[$k])) { $c | Add-Member -NotePropertyName $k -NotePropertyValue ([string]$f[$k]) -Force }
+    }
+    $c | Add-Member -NotePropertyName pend -NotePropertyValue 1 -Force
+    $out += $c
+  }
+  if ($type -eq 'block') { $out = @($out | Sort-Object { [string]$_.start }) }
+  return ,$out
+}
+
+function RD-CloseRows {
+  if ($script:openRow) {
+    $i = $script:openRow.Tag
+    $i.tt.X = 0
+    $i.acts.Visibility = 'Hidden'
+    $script:openRow = $null
+  }
+}
+
+function RD-OpenMenu($row) {
+  RD-CloseRows
+  $cm = $row.ContextMenu
+  $cm.PlacementTarget = $row
+  $cm.Placement = 'MousePoint'
+  $cm.IsOpen = $true
+}
+
+function RD-NewButton($text, $color, $info, $act) {
+  $b = New-Object Windows.Controls.Button -Property @{
+    Content = $text; Width = ($RdActW / 2); Foreground = '#ffffff'; BorderThickness = 0
+    Background = $color; FontFamily = 'Microsoft YaHei'; FontSize = 12; Cursor = 'Hand'
+  }
+  $b.Tag = @{ info = $info; act = $act }
+  $b.Add_Click({ param($o, $e) $t = $o.Tag; RD-CloseRows; if ($t.act -eq 'edit') { RD-EditDialog $t.info } else { RD-Delete $t.info } })
+  return $b
+}
+
+function Add-Item($el, $item, $type) {
+  $row = New-Object Windows.Controls.Grid -Property @{ ClipToBounds = $true; Margin = '0,1,0,1'; Background = [Windows.Media.Brushes]::Transparent }
+  $acts = New-Object Windows.Controls.StackPanel -Property @{ Orientation = 'Horizontal'; HorizontalAlignment = 'Right'; Visibility = 'Hidden' }
+  $fg = New-Object Windows.Controls.Border -Property @{ Child = $el; Background = (New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(1, 0, 0, 0))) }
+  $tt = New-Object Windows.Media.TranslateTransform
+  $fg.RenderTransform = $tt
+  $info = @{ item = $item; type = $type; tt = $tt; acts = $acts; row = $row; fg = $fg }
+  $row.Tag = $info
+  [void]$acts.Children.Add((RD-NewButton '编辑' '#22aa66' $info 'edit'))
+  [void]$acts.Children.Add((RD-NewButton '删除' '#cc3333' $info 'del'))
+  [void]$row.Children.Add($acts)
+  [void]$row.Children.Add($fg)
+  $cm = New-Object Windows.Controls.ContextMenu
+  $mi1 = New-Object Windows.Controls.MenuItem -Property @{ Header = '编辑' }
+  $mi1.Tag = $info
+  $mi1.Add_Click({ param($o, $e) RD-EditDialog $o.Tag })
+  $mi2 = New-Object Windows.Controls.MenuItem -Property @{ Header = '删除' }
+  $mi2.Tag = $info
+  $mi2.Add_Click({ param($o, $e) RD-Delete $o.Tag })
+  [void]$cm.Items.Add($mi1); [void]$cm.Items.Add($mi2)
+  $row.ContextMenu = $cm   # right-click on an item; window/tray menus are untouched
+  $row.Add_PreviewMouseLeftButtonDown({
+    param($o, $e)
+    $src = $e.OriginalSource
+    $i = $o.Tag
+    if ($src -is [Windows.DependencyObject]) {
+      $p = $src
+      while ($p -and $p -ne $o) {
+        if ($p -is [Windows.Controls.Button]) { return }
+        $p = [Windows.Media.VisualTreeHelper]::GetParent($p)
+      }
+    }
+    $pt = $e.GetPosition($sp)
+    $base = 0
+    if ($script:openRow -eq $o) { $base = -$RdActW }
+    $script:gs = @{ row = $o; x = $pt.X; y = $pt.Y; moved = $false; swiping = $false; fired = $false; base = $base }
+    $script:lpTimer.Stop(); $script:lpTimer.Start()
+    if ($i.type -ne 'todo') { $e.Handled = $true }   # no window DragMove from items; checkbox still gets its click
+  })
+  $row.Add_PreviewMouseMove({
+    param($o, $e)
+    $g = $script:gs
+    if (-not $g -or $g.row -ne $o) { return }
+    if ($e.LeftButton -ne 'Pressed') { return }
+    $pt = $e.GetPosition($sp)
+    $dx = $pt.X - $g.x; $dy = $pt.Y - $g.y
+    $adx = [Math]::Abs($dx); $ady = [Math]::Abs($dy)
+    if (-not $g.moved -and ($adx -gt 6 -or $ady -gt 6)) { $g.moved = $true; $script:lpTimer.Stop() }
+    if (-not $g.swiping -and $ady -gt 8 -and $ady -ge $adx) { $script:gs = $null; return }
+    if (-not $g.swiping -and $adx -gt 8 -and $adx -gt $ady * 1.5) {
+      $g.swiping = $true
+      if ($script:openRow -and $script:openRow -ne $o) { RD-CloseRows }
+      $o.Tag.acts.Visibility = 'Visible'
+      [void]$o.CaptureMouse()
+    }
+    if ($g.swiping) {
+      $tx = $g.base + $dx
+      if ($tx -gt 0) { $tx = 0 }
+      if ($tx -lt -$RdActW) { $tx = -$RdActW }
+      $o.Tag.tt.X = $tx
+      $e.Handled = $true
+    }
+  })
+  $row.Add_PreviewMouseLeftButtonUp({
+    param($o, $e)
+    $script:lpTimer.Stop()
+    $g = $script:gs
+    $script:gs = $null
+    if (-not $g -or $g.row -ne $o) { return }
+    if ($g.fired) { $e.Handled = $true; return }
+    if ($g.swiping) {
+      $o.ReleaseMouseCapture()
+      $i = $o.Tag
+      if ($i.tt.X -lt -$RdActW / 2) {
+        $i.tt.X = -$RdActW; $script:openRow = $o
+      } else {
+        $i.tt.X = 0; $i.acts.Visibility = 'Hidden'
+        if ($script:openRow -eq $o) { $script:openRow = $null }
+      }
+      $e.Handled = $true
+      return
+    }
+    if (-not $g.moved -and $script:openRow) { RD-CloseRows; $e.Handled = $true }
+  })
+  [void]$sp.Children.Add($row)
+}
+
+function RD-Rerender { if ($script:S) { try { Render-Schedule $script:S } catch { $hd.Text = "显示失败：$($_.Exception.Message)" } } }
+
+function RD-Push($e) {
+  $before = $script:EDITS
+  $script:EDITS = RD-Merge $script:EDITS $e
+  $script:editsW = Get-Date
+  RD-Rerender
+  try {
+    $tok = RD-Token
+    if (-not $tok) { throw '未提供 token' }
+    $g = (RD-Client $tok).DownloadString($RdApi) | ConvertFrom-Json
+    $list = @()
+    if ($g.files.'edits.json') { try { $list = @(($g.files.'edits.json'.content | ConvertFrom-Json).edits) } catch {} }
+    $list = RD-Merge $list $e
+    $inner = ConvertTo-Json -InputObject @{ edits = @($list) } -Depth 8
+    $body = ConvertTo-Json -InputObject @{ files = @{ 'edits.json' = @{ content = $inner } } } -Depth 8 -Compress
+    $c = RD-Client $tok
+    $c.Headers.Add('Content-Type', 'application/json; charset=utf-8')
+    [void]$c.UploadData($RdApi, 'PATCH', [Text.Encoding]::UTF8.GetBytes($body))
+    $script:EDITS = @($list)
+    $script:editsW = Get-Date
+  } catch {
+    $script:EDITS = $before
+    RD-Rerender
+    $hd.Text = "$(if ($e.action -eq 'delete') { '删除' } else { '编辑' })失败：$($_.Exception.Message)"
+  }
+}
+
+function RD-NewEdit($info, $action, $fields) {
+  return [pscustomobject]@{
+    eid = ('w' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString() + (Get-Random -Maximum 99999))
+    id = [string]$info.item.id; type = $info.type; action = $action; fields = $fields
+    at = [DateTime]::UtcNow.ToString('o')
+  }
+}
+
+function RD-Delete($info) {
+  $r = [Windows.MessageBox]::Show("删除「$($info.item.title)」？", '滚滚日程', 'OKCancel', 'Question')
+  if ($r -ne 'OK') { return }
+  RD-Push (RD-NewEdit $info 'delete' @{})
+}
+
+function RD-Field($panel, $label, $value) {
+  [void]$panel.Children.Add((New-Object Windows.Controls.TextBlock -Property @{ Text = $label; Foreground = '#99aabb'; Margin = '0,6,0,2' }))
+  $tb = New-Object Windows.Controls.TextBox -Property @{ Text = [string]$value; Padding = '4,3,4,3' }
+  [void]$panel.Children.Add($tb)
+  return $tb
+}
+
+function RD-EditDialog($info) {
+  RD-CloseRows
+  $it = $info.item
+  $todo = $info.type -eq 'todo'
+  $d = New-Object Windows.Window -Property @{
+    Title = $(if ($todo) { '编辑待办' } else { '编辑日程' }); Width = 340; SizeToContent = 'Height'
+    Topmost = $true; WindowStartupLocation = 'CenterScreen'; ResizeMode = 'NoResize'; FontFamily = 'Microsoft YaHei'
+  }
+  $p = New-Object Windows.Controls.StackPanel -Property @{ Margin = 10 }
+  $d.Content = $p
+  $tS = $null; $tE = $null; $tDue = $null; $cPri = $null; $tNote = $null
+  if (-not $todo) {
+    $st = if ($it.start -eq '--:--') { '' } else { [string]$it.start }
+    $tS = RD-Field $p '开始（HH:MM）' $st
+    $tE = RD-Field $p '结束（HH:MM）' $it.end
+  }
+  $tT = RD-Field $p '内容' $it.title
+  if ($todo) {
+    $tDue = RD-Field $p '截止' $it.due
+    [void]$p.Children.Add((New-Object Windows.Controls.TextBlock -Property @{ Text = '优先级'; Foreground = '#99aabb'; Margin = '0,6,0,2' }))
+    $cPri = New-Object Windows.Controls.ComboBox
+    foreach ($x in @('高', '中', '低')) { [void]$cPri.Items.Add($x) }
+    $cPri.SelectedItem = $(if ($it.priority) { [string]$it.priority } else { '中' })
+    [void]$p.Children.Add($cPri)
+    $tNote = RD-Field $p '备注' $it.note
+  }
+  $bp = New-Object Windows.Controls.StackPanel -Property @{ Orientation = 'Horizontal'; HorizontalAlignment = 'Right'; Margin = '0,12,0,0' }
+  $bSave = New-Object Windows.Controls.Button -Property @{ Content = '保存'; IsDefault = $true; Width = 70; Margin = '0,0,6,0' }
+  $bDel = New-Object Windows.Controls.Button -Property @{ Content = '删除'; Width = 70; Margin = '0,0,6,0'; Foreground = '#cc3333' }
+  $bCancel = New-Object Windows.Controls.Button -Property @{ Content = '取消'; IsCancel = $true; Width = 70 }
+  [void]$bp.Children.Add($bSave); [void]$bp.Children.Add($bDel); [void]$bp.Children.Add($bCancel)
+  [void]$p.Children.Add($bp)
+  $script:dlgResult = $null
+  $bSave.Add_Click({ $script:dlgResult = 'save'; $d.Close() })
+  $bDel.Add_Click({ $script:dlgResult = 'delete'; $d.Close() })
+  $tT.Focus() | Out-Null
+  $tT.SelectAll()
+  [void]$d.ShowDialog()
+  if ($script:dlgResult -eq 'delete') { RD-Delete $info; return }
+  if ($script:dlgResult -ne 'save') { return }
+  $title = $tT.Text.Trim()
+  if (-not $title) { [void][Windows.MessageBox]::Show('内容不能为空', '滚滚日程'); return }
+  if ($todo) {
+    $f = @{ title = $title; due = $tDue.Text.Trim(); priority = [string]$cPri.SelectedItem; note = $tNote.Text.Trim() }
+  } else {
+    $f = @{ title = $title }
+    $s1 = $tS.Text.Trim(); $e1 = $tE.Text.Trim()
+    $re = '^([01]?\d|2[0-3]):[0-5]\d$'
+    if ($s1 -or $e1) {
+      if (-not ($s1 -match $re -and $e1 -match $re)) { [void][Windows.MessageBox]::Show('时间格式应为 HH:MM，开始和结束需同时填写', '滚滚日程'); return }
+      $s1 = $s1.PadLeft(5, '0'); $e1 = $e1.PadLeft(5, '0')
+      if ($e1 -le $s1) { [void][Windows.MessageBox]::Show('结束时间需晚于开始', '滚滚日程'); return }
+      $f.start = $s1; $f['end'] = $e1
+    }
+  }
+  RD-Push (RD-NewEdit $info 'edit' $f)
+}
+# ---------------------------------------------------------------------------
 
 function Show-Win {
   $w.Show()

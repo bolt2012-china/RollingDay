@@ -28,6 +28,22 @@ h3{margin:12px 12px 4px;color:#8af;font-size:14px}
 .p中{border-color:#eb5}
 .p低{border-color:#6a6}
 #ft{font-size:11px;color:#666;padding:4px 12px}
+.row{position:relative;margin:3px 10px;border-radius:6px;overflow:hidden;touch-action:pan-y}
+.row .b{margin:0;position:relative;z-index:1;transition:transform .18s ease;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:pan-y}
+.row .b.dragging{transition:none}
+.row-actions{position:absolute;top:0;right:0;bottom:0;width:132px;display:flex;z-index:0}
+.row-actions button{flex:1;border:none;color:#fff;font-size:14px;font-weight:600}
+.act-edit{background:#2a6}.act-del{background:#c33}
+.b.pend{box-shadow:inset 0 0 0 1px #3e9}
+.mask{display:none;position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.55);z-index:20;align-items:flex-end;justify-content:center}
+.mask.show{display:flex}
+.sheet{width:100%;max-width:480px;background:#1c1c1c;border-radius:14px 14px 0 0;padding:12px 12px calc(12px + env(safe-area-inset-bottom));border-top:1px solid #333;max-height:90vh;overflow:auto;box-sizing:border-box}
+.sheet h2{margin:0 0 10px;font-size:16px;color:#7fd}
+.fr{margin-bottom:8px}.fr label{display:block;font-size:12px;color:#9ab;margin-bottom:3px}
+.fr input,.fr select{width:100%;box-sizing:border-box;background:#111;color:#ddd;border:1px solid #333;border-radius:8px;padding:9px;font-size:16px}
+.fg{display:flex}.fg .fr{flex:1}.fg .fr+.fr{margin-left:8px}
+.sbtn{display:block;width:100%;padding:13px;margin:5px 0;border:none;border-radius:10px;background:#2a2a2a;color:#ddd;font-size:16px}
+.sbtn.pri{background:#1a8f7a;color:#fff;font-weight:600}.sbtn.dng{color:#f66}
 </style>
 </head>
 <body>
@@ -38,12 +54,191 @@ h3{margin:12px 12px 4px;color:#8af;font-size:14px}
 </div>
 <div id="vp"><div id="c"></div></div>
 <div id="scrollHint">已暂停自动滚动</div>
+<div id="editMask" class="mask" role="dialog" aria-modal="true"><div class="sheet">
+<h2 id="eHead">编辑</h2>
+<div id="eTimeRow" class="fg"><div class="fr"><label for="eStart">开始</label><input id="eStart" type="time"></div><div class="fr"><label for="eEnd">结束</label><input id="eEnd" type="time"></div></div>
+<div class="fr"><label for="eTitle">内容</label><input id="eTitle" type="text" maxlength="200"></div>
+<div id="eTodoRow"><div class="fg"><div class="fr"><label for="eDue">截止</label><input id="eDue" type="text" placeholder="YYYY-MM-DD / 无截止"></div><div class="fr"><label for="ePri">优先级</label><select id="ePri"><option>高</option><option>中</option><option>低</option></select></div></div>
+<div class="fr"><label for="eNote">备注</label><input id="eNote" type="text" maxlength="300"></div></div>
+<button type="button" class="sbtn pri" id="eSave">保存</button>
+<button type="button" class="sbtn dng" id="eDel">删除</button>
+<button type="button" class="sbtn" id="eCancel">取消</button>
+</div></div>
+
 <script>
+/* RollingDay gestures (ported from docs/app): swipe-left reveals 编辑/删除,
+   long-press opens the edit sheet. Pointer events where available, touch +
+   mouse fallback otherwise. Vertical drags are handed to native scrolling.
+   ES2017-safe (no ?. / ??). */
+function rdGestures(c, opts) {
+  var ACTION_W = opts.actionW || 132;
+  var g = { id: null, el: null, sx: 0, sy: 0, dx: 0, dy: 0, moved: false, swiping: false, long: null, fired: false, baseX: 0 };
+  var api = { openId: null, active: function () { return !!g.el; } };
+  var lastLongFireAt = 0;
+  function ptX(e) { if (e.touches && e.touches[0]) return e.touches[0].clientX; if (e.changedTouches && e.changedTouches[0]) return e.changedTouches[0].clientX; return e.clientX || 0; }
+  function ptY(e) { if (e.touches && e.touches[0]) return e.touches[0].clientY; if (e.changedTouches && e.changedTouches[0]) return e.changedTouches[0].clientY; return e.clientY || 0; }
+  function card(t) { return t && t.closest ? t.closest(".b[data-id]") : null; }
+  function setX(el, x) { el.style.transform = x ? "translateX(" + x + "px)" : ""; el.style.webkitTransform = el.style.transform; }
+  api.closeAll = function (exceptId) {
+    var els = c.querySelectorAll(".b[data-id]");
+    for (var i = 0; i < els.length; i++) if (els[i].getAttribute("data-id") !== exceptId) setX(els[i], 0);
+    api.openId = exceptId || null;
+  };
+  api.restore = function () { /* re-apply open swipe after a re-render */
+    if (!api.openId) return;
+    var el = c.querySelector('.b[data-id="' + api.openId + '"]');
+    if (el) setX(el, -ACTION_W); else api.openId = null;
+  };
+  function down(e) {
+    if (e.button && e.button !== 0) return;
+    var cd = card(e.target);
+    if (!cd) return;
+    if (e.target.closest(".row-actions") || e.target.closest("input,button,a,select")) return;
+    var id = cd.getAttribute("data-id");
+    g.id = id; g.el = cd; g.sx = ptX(e); g.sy = ptY(e); g.dx = 0; g.dy = 0;
+    g.moved = false; g.swiping = false; g.fired = false;
+    g.baseX = api.openId === id ? -ACTION_W : 0;
+    cd.classList.add("dragging");
+    clearTimeout(g.long);
+    g.long = setTimeout(function () {
+      if (g.moved || g.swiping || !g.el) return;
+      g.fired = true; lastLongFireAt = Date.now();
+      if (navigator.vibrate) try { navigator.vibrate(15); } catch (err) {}
+      api.closeAll(); opts.onEdit(id);
+    }, 480);
+  }
+  function move(e) {
+    if (!g.el) return;
+    g.dx = ptX(e) - g.sx; g.dy = ptY(e) - g.sy;
+    var adx = Math.abs(g.dx), ady = Math.abs(g.dy);
+    if (!g.moved && (adx > 8 || ady > 8)) { g.moved = true; clearTimeout(g.long); }
+    if (!g.swiping && ady > 10 && ady >= adx) { /* vertical: native scroll */
+      g.el.classList.remove("dragging"); g.el = null; return;
+    }
+    if (!g.swiping && adx > 10 && adx > ady * 1.5) {
+      g.swiping = true;
+      if (api.openId && api.openId !== g.id) api.closeAll(g.id);
+    }
+    if (g.swiping) {
+      var tx = g.baseX + g.dx;
+      if (tx > 0) tx = 0;
+      if (tx < -ACTION_W) tx = -ACTION_W;
+      setX(g.el, tx);
+      if (e.cancelable) e.preventDefault();
+    }
+  }
+  function up() {
+    clearTimeout(g.long);
+    if (!g.el) return;
+    var el = g.el, id = g.id;
+    el.classList.remove("dragging"); g.el = null;
+    if (g.fired) return;
+    if (g.swiping) {
+      var open = g.baseX + g.dx < -ACTION_W / 2;
+      setX(el, open ? -ACTION_W : 0);
+      api.openId = open ? id : (api.openId === id ? null : api.openId);
+      return;
+    }
+    if (!g.moved) {
+      if (api.openId) api.closeAll();
+      else if (opts.onTap) opts.onTap(id);
+    }
+  }
+  function cancel() {
+    clearTimeout(g.long);
+    if (g.el) { g.el.classList.remove("dragging"); if (g.swiping) setX(g.el, api.openId === g.id ? -ACTION_W : 0); }
+    g.el = null;
+  }
+  if (window.PointerEvent) {
+    c.addEventListener("pointerdown", down);
+    c.addEventListener("pointermove", move);
+    c.addEventListener("pointerup", up);
+    c.addEventListener("pointercancel", cancel);
+  } else {
+    var lastTouch = 0;
+    var tw = function (fn) { return function (e) { lastTouch = Date.now(); fn(e); }; };
+    var mw = function (fn) { return function (e) { if (Date.now() - lastTouch < 800) return; fn(e); }; };
+    c.addEventListener("touchstart", tw(down), { passive: true });
+    c.addEventListener("touchmove", tw(move), { passive: false });
+    c.addEventListener("touchend", tw(up));
+    c.addEventListener("touchcancel", tw(cancel));
+    c.addEventListener("mousedown", mw(down));
+    window.addEventListener("mousemove", mw(move));
+    window.addEventListener("mouseup", mw(up));
+  }
+  c.addEventListener("touchmove", function (e) { if (g.swiping && g.el && e.cancelable) e.preventDefault(); }, { passive: false });
+  /* swallow the click synthesized after a long-press so it can't hit the sheet */
+  c.addEventListener("touchend", function (e) {
+    if (lastLongFireAt && Date.now() - lastLongFireAt < 5000) { lastLongFireAt = 0; if (e.cancelable) e.preventDefault(); }
+  }, { passive: false });
+  c.addEventListener("contextmenu", function (e) {
+    var cd = card(e.target);
+    if (!cd) return;
+    e.preventDefault();
+    if (Date.now() - lastLongFireAt < 1500) return; /* long-press already opened it */
+    clearTimeout(g.long); g.el = null; api.closeAll();
+    opts.onEdit(cd.getAttribute("data-id"));
+  });
+  c.addEventListener("click", function (e) {
+    var act = e.target.closest ? e.target.closest("[data-act]") : null;
+    if (act) {
+      e.preventDefault(); e.stopPropagation();
+      var id = act.getAttribute("data-id");
+      api.closeAll();
+      if (act.getAttribute("data-act") === "edit") opts.onEdit(id); else opts.onDel(id);
+    }
+  });
+  document.addEventListener("click", function (e) {
+    if (api.openId && !(e.target.closest && e.target.closest(".row"))) api.closeAll();
+  });
+  return api;
+}
+/* ---- edits.json: optimistic edit/delete, written back to the gist ---- */
+var EDITS = [], editsW = 0;
+function rdApplyEdits(s, edits) { /* returns a copy of s with edits overlaid */
+  var o = JSON.parse(JSON.stringify(s));
+  for (var i = 0; i < edits.length; i++) {
+    var e = edits[i], f = e.fields || {}, k, j, d;
+    if (e.type !== "block") {
+      for (j = 0; j < o.todos.length; j++) if (o.todos[j].id === e.id) {
+        if (e.action === "delete") o.todos.splice(j, 1);
+        else { for (k in f) if (["title", "due", "priority", "note"].indexOf(k) >= 0) o.todos[j][k] = f[k]; o.todos[j].pend = 1; }
+        break;
+      }
+    }
+    if (e.type !== "todo") {
+      for (d = 0; d < o.days.length; d++) {
+        var bl = o.days[d].blocks;
+        for (j = 0; j < bl.length; j++) if (bl[j].id === e.id) {
+          if (e.action === "delete") bl.splice(j, 1);
+          else { for (k in f) if (["title", "start", "end"].indexOf(k) >= 0 && f[k]) bl[j][k] = f[k]; bl[j].pend = 1; }
+          bl.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
+          break;
+        }
+      }
+    }
+  }
+  return o;
+}
+function rdFindItem(s, id) {
+  for (var j = 0; j < s.todos.length; j++) if (s.todos[j].id === id) return { type: "todo", it: s.todos[j] };
+  for (var d = 0; d < s.days.length; d++) for (var b = 0; b < s.days[d].blocks.length; b++)
+    if (s.days[d].blocks[b].id === id) return { type: "block", it: s.days[d].blocks[b], day: s.days[d] };
+  return null;
+}
+function rdMergeEdit(list, e) { /* one pending edit per item: later edits merge into earlier */
+  var out = [], prev = null;
+  for (var i = 0; i < list.length; i++) { if (list[i].id === e.id && list[i].type === e.type) prev = list[i]; else out.push(list[i]); }
+  if (prev && prev.action === "edit" && e.action === "edit") e.fields = Object.assign({}, prev.fields || {}, e.fields || {});
+  out.push(e);
+  return out;
+}
 const LS_GIST = "rollingday.gist";
 const LS_TZ = "rollingday.timezone";
 const LS_TOKEN = "rollingday.githubToken";
 const LS_DEMO_DONE = "rollingday.demoDone";
-let S = null, DONE = new Set(), pend = {}, lastW = 0;
+const LS_DEMO_EDITS = "rollingday.demoEdits";
+let S = null, V = null, DONE = new Set(), pend = {}, lastW = 0, dirty = false;
 
 function query() {
   return new URLSearchParams(location.search);
@@ -139,7 +334,15 @@ async function fetchGistFile(name, token) {
   return g.files[name].content || "";
 }
 
-function render(s) {
+function rowHtml(id, cls, inner) {
+  return `<div class="row"><div class="row-actions"><button type="button" class="act-edit" data-act="edit" data-id="${esc(id)}">编辑</button>` +
+    `<button type="button" class="act-del" data-act="del" data-id="${esc(id)}">删除</button></div><div class="${cls}" data-id="${esc(id)}">${inner}</div></div>`;
+}
+function render(s0) {
+  if (!s0) return;
+  if (typeof G !== "undefined" && G && (G.active() || sheetOpen())) { dirty = true; return; }
+  dirty = false;
+  const s = V = rdApplyEdits(Object.assign({ days: [], todos: [] }, s0), EDITS);
   const cfg = configure();
   const n = nowParts(cfg.timezone);
   let h = "", cur = null, nxt = null;
@@ -147,7 +350,7 @@ function render(s) {
     if (d.date < n.date) continue;
     h += `<h3>${esc(d.label || d.date)}</h3>`;
     for (const b of (d.blocks || [])) {
-      let k = "b" + (b.kind === "class" ? " cls" : "");
+      let k = "b" + (b.kind === "class" ? " cls" : "") + (b.pend ? " pend" : "");
       if (d.date === n.date) {
         if (b.start <= n.hm && n.hm < b.end) {
           k += " cur"; cur = b;
@@ -159,29 +362,32 @@ function render(s) {
       } else if (!nxt && !cur && b.kind !== "note") {
         nxt = Object.assign({}, b, { start: (d.label || d.date) + " " + b.start });
       }
-      h += `<div class="${k}"><div class="t">${esc(b.start)}${b.end ? "–" + esc(b.end) : ""}</div>${esc(b.title)}</div>`;
+      const inner = `<div class="t">${esc(b.start)}${b.end ? "–" + esc(b.end) : ""}</div>${esc(b.title)}`;
+      h += b.id ? rowHtml(b.id, k, inner) : `<div class="${k}">${inner}</div>`;
     }
   }
   h += "<h3>待办</h3>";
   for (const t of (s.todos || [])) {
     const d = isDone(t);
-    h += `<div class="b p${esc(t.priority || "中")}${d ? " dn" : ""}" id="t_${esc(t.id)}">` +
+    h += rowHtml(t.id, `b p${esc(t.priority || "中")}${d ? " dn" : ""}${t.pend ? " pend" : ""}`,
       `<input type="checkbox" ${d ? "checked" : ""} onclick="event.stopPropagation();tog('${esc(t.id)}',this.checked)">` +
-      `<div class="t">${esc(t.due || "")} · ${esc(t.priority || "中")}</div>${esc(t.title)}</div>`;
+      `<div class="t">${esc(t.due || "")} · ${esc(t.priority || "中")}</div>${esc(t.title)}`);
   }
-  h += `<div id="ft">更新于 ${esc(s.updated_at || "")} · ${cfg.demo ? "demo 本地模式" : "gist " + esc(cfg.gist.label || "未配置")} · ` +
+  h += `<div id="ft">更新于 ${esc(s.updated_at || "")} · ${cfg.demo ? "demo 本地模式" : "gist " + esc(cfg.gist.label || "未配置")} · 左滑编辑/删除 · 长按编辑 · ` +
     `<a href="#" onclick="localStorage.removeItem('${LS_TOKEN}');alert('已清除 token');return false">重置 token</a></div>`;
   document.getElementById("c").innerHTML = h;
   document.getElementById("now").textContent = cur ? `现在：${cur.title}（至 ${cur.end}）` : "现在：空闲";
   document.getElementById("nx").textContent = nxt ? `下一项：${nxt.start} ${nxt.title}` : "";
+  if (typeof G !== "undefined" && G) G.restore();
 }
 
 async function tog(id, v) {
   const cfg = configure();
   pend[id] = v;
-  const t = (S.todos || []).find(x => x.id === id);
+  const t = ((V || S).todos || []).find(x => x.id === id);
   if (!t) return;
-  t.done = false;
+  const t0 = (S.todos || []).find(x => x.id === id);
+  if (t0) t0.done = false;
   render(S);
   const err = document.getElementById("err");
   err.textContent = "";
@@ -238,6 +444,11 @@ async function load() {
         }
       } catch (e) {}
     }
+    if (cfg.demo) {
+      EDITS = JSON.parse(localStorage.getItem(LS_DEMO_EDITS) || "[]");
+    } else if (Date.now() - editsW > 180000) {
+      try { EDITS = JSON.parse(await fetchGistFile("edits.json")).edits || []; } catch (e) {}
+    }
     document.getElementById("err").textContent = "";
     render(S);
   } catch (e) {
@@ -245,6 +456,107 @@ async function load() {
     document.getElementById("err").textContent = "加载失败：" + e.message;
   }
 }
+
+/* ---- edit / delete: optimistic overlay + write-back to edits.json ---- */
+let editQ = Promise.resolve();
+function rdUndo(list, e) { return list.filter(function (x) { return x.eid !== e.eid; }); }
+function getToken() {
+  let token = localStorage.getItem(LS_TOKEN);
+  if (!token) {
+    token = prompt("输入 GitHub token（gist 权限，仅存本机 localStorage）");
+    if (!token) return null;
+    token = token.trim();
+    localStorage.setItem(LS_TOKEN, token);
+  }
+  return token;
+}
+function pushEdit(e) {
+  EDITS = rdMergeEdit(EDITS, e);
+  editsW = Date.now();
+  render(S);
+  editQ = editQ.then(function () { return writeEdit(e); });
+  return editQ;
+}
+async function writeEdit(e) {
+  const cfg = configure();
+  const err = document.getElementById("err");
+  err.textContent = "";
+  if (cfg.demo) { localStorage.setItem(LS_DEMO_EDITS, JSON.stringify(EDITS)); return; }
+  const token = getToken();
+  if (!token) { EDITS = rdUndo(EDITS, e); render(S); return; }
+  try {
+    const api = `https://api.github.com/gists/${encodeURIComponent(cfg.gist.id)}`;
+    const headers = { Authorization: "Bearer " + token, Accept: "application/vnd.github+json" };
+    const g = await (await fetch(api, { headers, cache: "no-store" })).json();
+    if (!g.files) throw new Error(g.message || "读取失败");
+    let d = { edits: [] };
+    try { d = JSON.parse((g.files["edits.json"] || {}).content || "{\"edits\":[]}"); } catch (x) {}
+    d.edits = rdMergeEdit(d.edits || [], e);
+    const r = await fetch(api, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ files: { "edits.json": { content: JSON.stringify(d, null, 1) } } })
+    });
+    if (!r.ok) throw new Error("写入失败 HTTP " + r.status);
+    EDITS = d.edits;
+    editsW = Date.now();
+    render(S);
+  } catch (x) {
+    EDITS = rdUndo(EDITS, e);
+    render(S);
+    err.textContent = (e.action === "delete" ? "删除" : "编辑") + "失败：" + x.message;
+  }
+}
+function newEdit(id, type, action, fields) {
+  return { eid: Date.now().toString(36) + Math.random().toString(36).slice(2, 8), id: id, type: type, action: action, fields: fields || {}, at: new Date().toISOString() };
+}
+let editing = null;
+function $id(x) { return document.getElementById(x); }
+function sheetOpen() { return $id("editMask").classList.contains("show"); }
+function openEdit(id) {
+  const f = V && rdFindItem(V, id);
+  if (!f) return;
+  editing = f;
+  const it = f.it, todo = f.type === "todo";
+  $id("eHead").textContent = todo ? "编辑待办" : "编辑日程" + (f.day ? " · " + (f.day.label || f.day.date) : "");
+  $id("eTimeRow").style.display = todo ? "none" : "";
+  $id("eTodoRow").style.display = todo ? "" : "none";
+  $id("eStart").value = todo || it.start === "--:--" ? "" : (it.start || "");
+  $id("eEnd").value = todo ? "" : (it.end || "");
+  $id("eTitle").value = it.title || "";
+  if (todo) { $id("eDue").value = it.due || ""; $id("ePri").value = it.priority || "中"; $id("eNote").value = it.note || ""; }
+  $id("editMask").classList.add("show");
+}
+function closeEdit() { $id("editMask").classList.remove("show"); editing = null; if (dirty) render(S); }
+function delItem(id) {
+  const f = V && rdFindItem(V, id);
+  if (!f) return;
+  if (!confirm("删除「" + f.it.title + "」？")) return;
+  pushEdit(newEdit(id, f.type, "delete"));
+}
+$id("eCancel").addEventListener("click", closeEdit);
+$id("editMask").addEventListener("click", function (e) { if (e.target === $id("editMask")) closeEdit(); });
+$id("eDel").addEventListener("click", function () { const f = editing; if (!f) return; closeEdit(); delItem(f.it.id); });
+$id("eSave").addEventListener("click", function () {
+  const f = editing;
+  if (!f) return;
+  const title = $id("eTitle").value.trim();
+  if (!title) { alert("内容不能为空"); return; }
+  let fields;
+  if (f.type === "todo") {
+    fields = { title: title, due: $id("eDue").value.trim(), priority: $id("ePri").value, note: $id("eNote").value.trim() };
+  } else {
+    fields = { title: title };
+    const st = $id("eStart").value, en = $id("eEnd").value;
+    if ((st && !en) || (!st && en)) { alert("开始和结束时间需同时填写"); return; }
+    if (st && en && en <= st) { alert("结束时间需晚于开始"); return; }
+    if (st) { fields.start = st; fields.end = en; }
+  }
+  const id = f.it.id;
+  closeEdit();
+  pushEdit(newEdit(id, f.type, "edit", fields));
+});
+const G = rdGestures(document.getElementById("c"), { actionW: 132, onEdit: openEdit, onDel: delItem });
 
 load();
 setInterval(load, 60000);
@@ -293,7 +605,7 @@ function rdAutoScroll(vp, opts) {
   }, 40);
   return { pause: pause };
 }
-rdAutoScroll(vp, { step: scrollStep(), idleMs: 5000, hintEl: document.getElementById("scrollHint") });
+rdAutoScroll(vp, { step: scrollStep(), idleMs: 5000, hintEl: document.getElementById("scrollHint"), blocked: function () { return sheetOpen() || !!G.openId; } });
 </script>
 </body>
 </html>

@@ -3,6 +3,7 @@ todo.md
 week_*.md
 schedule.json
 done.json
+edits.json
 gist.json
 
 # Local sync configuration may contain private gist ids or paths.
@@ -20,6 +21,7 @@ desktop/windows/token.dat
 !examples/week_example.md
 !examples/schedule.json
 !examples/done.json
+!examples/edits.json
 
 # Python
 __pycache__/

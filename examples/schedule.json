@@ -1,12 +1,14 @@
 {
   "updated_at": "2026-10-22 09:55 (Asia/Shanghai)",
   "current": {
+    "id": "bdcee978b38",
     "start": "09:45",
     "end": "10:20",
     "title": "图书馆自习：高等数学",
     "kind": "task"
   },
   "next": {
+    "id": "b37ae4b2e76",
     "start": "10:45",
     "end": "11:30",
     "title": "英语听力练习",
@@ -19,48 +21,56 @@
       "label": "10/22 周四",
       "blocks": [
         {
+          "id": "b0aa7375f5d",
           "start": "08:00",
           "end": "08:30",
           "title": "早餐与通勤",
           "kind": "task"
         },
         {
+          "id": "b91eaf016e5",
           "start": "08:00",
           "end": "09:40",
           "title": "上课：高等数学",
           "kind": "class"
         },
         {
+          "id": "bdcee978b38",
           "start": "09:45",
           "end": "10:20",
           "title": "图书馆自习：高等数学",
           "kind": "task"
         },
         {
+          "id": "b5eab0edad4",
           "start": "10:00",
           "end": "11:40",
           "title": "上课：大学英语",
           "kind": "class"
         },
         {
+          "id": "b37ae4b2e76",
           "start": "10:45",
           "end": "11:30",
           "title": "英语听力练习",
           "kind": "task"
         },
         {
+          "id": "b6dcd7151dd",
           "start": "16:30",
           "end": "17:20",
           "title": "健身：跑步和拉伸",
           "kind": "task"
         },
         {
+          "id": "ba9aee5a591",
           "start": "19:30",
           "end": "20:00",
           "title": "项目会议",
           "kind": "task"
         },
         {
+          "id": "b5fc08757bb",
           "start": "--:--",
           "end": "",
           "title": "记得带学生卡和水杯",
@@ -73,30 +83,35 @@
       "label": "10/23 周五",
       "blocks": [
         {
+          "id": "b4d62469dc0",
           "start": "09:00",
           "end": "09:50",
           "title": "复习英语单词",
           "kind": "task"
         },
         {
+          "id": "bde2d874e21",
           "start": "10:00",
           "end": "11:40",
           "title": "课程作业时间",
           "kind": "task"
         },
         {
+          "id": "bb517dd5c95",
           "start": "14:00",
           "end": "15:00",
           "title": "项目会议纪要整理",
           "kind": "task"
         },
         {
+          "id": "b7dd34e8f65",
           "start": "18:30",
           "end": "19:20",
           "title": "健身房力量训练",
           "kind": "task"
         },
         {
+          "id": "b2c15bb10a5",
           "start": "20:30",
           "end": "21:10",
           "title": "读书：《算法图解》",

@@ -62,8 +62,9 @@ RollingDay 是一个轻量的个人日程工具：用 Markdown 写日程和待�
 - 手机 PWA：一行输入日程，本机存储、可离线、可添加到主屏幕；支持浏览器通知提醒与左滑/长按编辑（见上一节）。
 - 手机网页（gist 版）：读取 gist 中的 `schedule.json` / `done.json`，自动滚动今天及之后的日程块和待办。
 - 待办勾选：网页端用 GitHub API PATCH `done.json`，token 仅保存在当前浏览器 `localStorage`。
-- Markdown 同步：`sync/sync_gist.py` 从 `todo.md` 和 `week_*.md` 生成 `schedule.json`，并把远端 `done.json` 合并回 `todo.md`。
-- Windows 小组件：PowerShell + WPF always-on-top 滚动窗口，支持勾选待办；系统托盘可隐藏/重新打开；token 用 Windows DPAPI 加密保存在本机。
+- 编辑 / 删除手势（gist 网页 + Windows 小组件）：手机上长按条目打开编辑面板（改时间/内容、删除），左滑露出「编辑 / 删除」；桌面上长按左键或右键条目弹出「编辑 / 删除」菜单，按住向左拖同样露出按钮。改动立即显示，并追加到 gist 的 `edits.json`（`{eid, id, type, action: edit|delete, fields}`）。
+- Markdown 同步：`sync/sync_gist.py` 从 `todo.md` 和 `week_*.md` 生成 `schedule.json`，并把远端 `done.json` 合并回 `todo.md`；同时把 `edits.json` 中的编辑/删除幂等地应用到 `todo.md` / `week_*.md`（日程块带稳定 id），应用后从 `edits.json` 清除。
+- Windows 小组件：PowerShell + WPF always-on-top 滚动窗口，支持勾选待办与右键/长按/左拖编辑删除；系统托盘可隐藏/重新打开；token 用 Windows DPAPI 加密保存在本机。
 - 可配置：gist owner/id、文件路径、时区、课程节次时间都由配置文件、环境变量或网页 URL 参数提供。
 
 ## 目录结构
