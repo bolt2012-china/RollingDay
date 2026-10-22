@@ -53,6 +53,8 @@ RollingDay 是一个轻量的个人日程工具：用 Markdown 写日程和待�
 - 没有时间的行当作待办。
 - **手势：** 轻点标记完成；左滑露出「编辑 / 删除」（删除需确认）；长按打开编辑（星期、时间、标题、提前提醒）。
 - **提醒（尽力而为）：** 设置里开启「日程提醒」并允许通知。默认可提前 0/5/10/15/30 分钟；单条可覆盖。实现上优先用 Chrome 的 Notification Triggers（`TimestampTrigger`），否则靠 Service Worker + IndexedDB 待发队列，以及页面打开时的定时器/补发。**不能写入系统闹钟**；Android Chrome 较稳，iOS Safari/PWA 通知能力有限。
+- **v6 双提醒：** 每个有时间的日程默认提醒两次——提前量（默认 10 分钟）一次、开始时间准点一次；设置里可关闭「准点再提醒一次」。每条提醒只发一次（localStorage 去重）。
+- **同步页提醒（web/index.html）：** 左下角「提醒」开关（点击时申请通知权限）。页面打开期间对当天日程提前 10 分钟 + 准点各提醒一次；优先 Service Worker `showNotification`，否则 `new Notification`；浏览器不支持通知（常见于 Android 自带浏览器）时改用页内横幅 + 振动 + 提示音。**必须保持页面打开**，关闭或进入后台后网页无法响铃。
 - 设置（⚙）还可导出/导入 JSON 或清空数据。更新后请硬刷新或重新打开主屏幕图标，以便加载新版 Service Worker。
 
 > 若仍想用 secret gist 跨设备同步，请继续用下方的 `web/index.html` + `sync/sync_gist.py` 流程。

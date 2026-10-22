@@ -205,7 +205,7 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
 </div>
 
 <div id="vp"><div id="c"></div></div>
-<div id="ft">v5 · 数据仅存本机 · 离线可用 · 手指可上下滑动</div>
+<div id="ft">v6 · 数据仅存本机 · 离线可用 · 手指可上下滑动</div>
 <div id="scrollHint">已暂停自动滚动</div>
 <div id="toast" class="toast"></div>
 
@@ -283,6 +283,14 @@ h3 { margin: 14px 14px 6px; color: #8af; font-size: 13px; font-weight: 600; lett
         <option value="30">30</option>
       </select>
     </div>
+    <div class="toggle-row" style="margin-top:10px">
+      <div>
+        <span>准点再提醒一次</span>
+        <small>开始时间到时第二次提醒（可关）</small>
+      </div>
+      <button type="button" class="switch" id="onTimeSwitch" aria-label="准点提醒"></button>
+    </div>
+    <p class="note">建议「添加到主屏幕」安装后使用；后台/锁屏时能否准时响取决于系统，网页无法设置真正的闹钟。</p>
     <div class="settings-actions" style="margin-top:8px">
       <button type="button" id="btnTestNotif">发送测试通知</button>
       <button type="button" id="btnExport">导出 JSON</button>
@@ -364,6 +372,7 @@ function rdAutoScroll(vp, opts) {
   };
   const REMIND_OPTS = [0, 5, 10, 15, 30];
   const MISS_WINDOW_MS = 30 * 60 * 1000;
+  const LS_FIRED = "rollingday.remindFired";
   const ACTION_W = 148;
 
   let store = loadStore();
@@ -405,10 +414,11 @@ function rdAutoScroll(vp, opts) {
       const d = raw ? JSON.parse(raw) : {};
       return {
         remindersEnabled: !!d.remindersEnabled,
-        defaultRemindMin: REMIND_OPTS.includes(+d.defaultRemindMin) ? +d.defaultRemindMin : 10
+        defaultRemindMin: REMIND_OPTS.includes(+d.defaultRemindMin) ? +d.defaultRemindMin : 10,
+        onTimeRemind: d.onTimeRemind !== false
       };
     } catch (e) {
-      return { remindersEnabled: false, defaultRemindMin: 10 };
+      return { remindersEnabled: false, defaultRemindMin: 10, onTimeRemind: true };
     }
   }
 
@@ -823,20 +833,30 @@ function rdAutoScroll(vp, opts) {
     const now = Date.now();
     for (const it of store.items) {
       if (it.done || it.kind !== "block" || !it.start) continue;
+      if (it.remindBefore === 0) continue; // item explicitly set to 不提醒
       const mins = effectiveRemind(it);
-      if (!mins || mins <= 0) continue;
       const startMs = shanghaiToEpoch(it.date, it.start);
-      const fireAt = startMs - mins * 60 * 1000;
-      if (fireAt + MISS_WINDOW_MS < now) continue; // too old
-      rows.push({
-        id: it.id,
-        fireAt,
-        title: "即将开始：" + it.title,
-        body: labelFor(it.date) + " " + it.start + (it.end ? "–" + it.end : "") + " · 提前 " + mins + " 分钟",
-        startAt: startMs
+      const when = labelFor(it.date) + " " + it.start + (it.end ? "–" + it.end : "");
+      // v6: two reminders — lead time (default 10′) and at start time
+      if (mins > 0) {
+        const fireAt = startMs - mins * 60 * 1000;
+        if (fireAt + MISS_WINDOW_MS >= now) rows.push({
+          id: it.id + "-pre", fireAt,
+          title: "即将开始：" + it.title,
+          body: when + " · 提前 " + mins + " 分钟", startAt: startMs
+        });
+      }
+      if (settings.onTimeRemind && startMs + MISS_WINDOW_MS >= now) rows.push({
+        id: it.id + "-start", fireAt: startMs,
+        title: "现在开始：" + it.title,
+        body: when, startAt: startMs
       });
     }
-    return rows;
+    return rows.filter((r) => !isFired(r));
+  }
+  function isFired(row) {
+    try { const f = JSON.parse(localStorage.getItem(LS_FIRED) || "{}") || {}; return !!f[row.id + "@" + row.fireAt]; }
+    catch (e) { return false; }
   }
 
   function clearLocalTimers() {
@@ -852,6 +872,9 @@ function rdAutoScroll(vp, opts) {
       if (delay > 8 * 60 * 60 * 1000) continue; // only arm near-term locally
       if (delay <= 0) continue;
       const tid = setTimeout(() => {
+        localTimers.delete(row.id);
+        if (!markFired(row)) return; // already fired once (dedupe)
+        postToSw({ type: "cancel-reminder", id: row.id }).catch(() => {});
         if (notifPerm() === "granted") {
           try {
             new Notification(row.title, {
@@ -869,6 +892,20 @@ function rdAutoScroll(vp, opts) {
     }
   }
 
+  function markFired(row) { // true if this reminder had not fired yet
+    try {
+      const f = JSON.parse(localStorage.getItem(LS_FIRED) || "{}") || {};
+      const now = Date.now();
+      for (const k in f) if (now - f[k] > 2 * 86400000) delete f[k];
+      const key = row.id + "@" + row.fireAt;
+      if (f[key]) return false;
+      f[key] = now;
+      localStorage.setItem(LS_FIRED, JSON.stringify(f));
+    } catch (e) {}
+    return true;
+  }
+  window.__rdBuildReminderRows = buildReminderRows;
+
   function notifPerm() {
     try { return ("Notification" in window) ? Notification.permission : "unsupported"; }
     catch (e) { return "unsupported"; }
@@ -879,7 +916,8 @@ function rdAutoScroll(vp, opts) {
       armLocalTimers(rows);
       if (swReg && typeof MessageChannel === "function") {
         await postToSw({ type: "sync-reminders", reminders: rows });
-        await postToSw({ type: "check-due", maxMissedMs: MISS_WINDOW_MS });
+        const res = await postToSw({ type: "check-due", maxMissedMs: MISS_WINDOW_MS });
+        if (res && Array.isArray(res.fired)) for (const r of rows) if (res.fired.indexOf(r.id) >= 0) markFired(r);
       }
     } catch (e) { /* reminders must never break UI */ }
   }
@@ -906,12 +944,13 @@ function rdAutoScroll(vp, opts) {
     const on = settings.remindersEnabled && notifPerm() === "granted";
     sw.classList.toggle("on", on);
     $("defaultRemind").value = String(settings.defaultRemindMin);
+    $("onTimeSwitch").classList.toggle("on", !!settings.onTimeRemind);
     if (!("Notification" in window)) {
       st.textContent = "浏览器不支持通知";
     } else if (notifPerm() === "denied") {
       st.textContent = "系统已拒绝通知权限";
     } else if (on) {
-      st.textContent = "已开启 · 默认提前 " + settings.defaultRemindMin + " 分钟";
+      st.textContent = "已开启 · " + (settings.defaultRemindMin > 0 ? "提前 " + settings.defaultRemindMin + " 分钟" : "") + (settings.onTimeRemind ? (settings.defaultRemindMin > 0 ? " + " : "") + "准点" : "") + "提醒";
     } else if (settings.remindersEnabled) {
       st.textContent = "已勾选但尚未授予权限";
     } else {
@@ -1139,6 +1178,12 @@ function rdAutoScroll(vp, opts) {
     toast(granted ? "提醒已开启" : "未开启提醒");
   });
 
+  $("onTimeSwitch").addEventListener("click", async () => {
+    settings.onTimeRemind = !settings.onTimeRemind;
+    saveSettings();
+    await syncReminders();
+    updateNotifUI();
+  });
   $("defaultRemind").addEventListener("change", async () => {
     settings.defaultRemindMin = +$("defaultRemind").value;
     saveSettings();

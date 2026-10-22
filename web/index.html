@@ -44,6 +44,10 @@ h3{margin:12px 12px 4px;color:#8af;font-size:14px}
 .fg{display:flex}.fg .fr{flex:1}.fg .fr+.fr{margin-left:8px}
 .sbtn{display:block;width:100%;padding:13px;margin:5px 0;border:none;border-radius:10px;background:#2a2a2a;color:#ddd;font-size:16px}
 .sbtn.pri{background:#1a8f7a;color:#fff;font-weight:600}.sbtn.dng{color:#f66}
+#remBtn{position:fixed;left:10px;bottom:10px;z-index:6;background:#222;color:#aaa;border:1px solid #444;border-radius:14px;font-size:12px;padding:5px 10px}
+#remBtn.on{background:#14392f;color:#9fe;border-color:#3e9}
+#remHint{position:fixed;left:12px;bottom:40px;z-index:6;color:#777;font-size:10px;max-width:70%;pointer-events:none}
+#remBanner{display:none;position:fixed;left:8px;right:8px;top:8px;z-index:30;background:#1a8f7a;color:#fff;padding:10px 12px;border-radius:10px;font-size:14px;box-shadow:0 4px 16px rgba(0,0,0,.5)}
 </style>
 </head>
 <body>
@@ -54,6 +58,7 @@ h3{margin:12px 12px 4px;color:#8af;font-size:14px}
 </div>
 <div id="vp"><div id="c"></div></div>
 <div id="scrollHint">已暂停自动滚动</div>
+<button type="button" id="remBtn">🔕 提醒：关</button><div id="remHint"></div><div id="remBanner" role="alert"></div>
 <div id="editMask" class="mask" role="dialog" aria-modal="true"><div class="sheet">
 <h2 id="eHead">编辑</h2>
 <div id="eTimeRow" class="fg"><div class="fr"><label for="eStart">开始</label><input id="eStart" type="time"></div><div class="fr"><label for="eEnd">结束</label><input id="eEnd" type="time"></div></div>
@@ -606,6 +611,114 @@ function rdAutoScroll(vp, opts) {
   return { pause: pause };
 }
 rdAutoScroll(vp, { step: scrollStep(), idleMs: 5000, hintEl: document.getElementById("scrollHint"), blocked: function () { return sheetOpen() || !!G.openId; } });
+
+/* RollingDay reminders (sync page): fires "10 min before" + "at start" for
+   today's timed items while this page is open. Dedupe in localStorage so each
+   reminder fires once per item. Notification via service worker
+   showNotification -> new Notification -> in-page banner + vibrate + beep.
+   ES2017-safe (no ?. / ??). Background alarms are NOT possible: page must stay open. */
+function rdReminders(opts) {
+  var LS_ON = "rollingday.remind.on", LS_FIRED = "rollingday.remind.fired";
+  var LEAD = opts.leadMin || 10, WINDOW = 2; /* fire if within 2 min after target */
+  var btn = document.getElementById("remBtn"), hint = document.getElementById("remHint"), ban = document.getElementById("remBanner");
+  var actx = null;
+  function on() { try { return localStorage.getItem(LS_ON) === "1"; } catch (e) { return false; } }
+  function hasN() { return typeof window.Notification === "function"; }
+  function perm() { try { return hasN() ? Notification.permission : "unsupported"; } catch (e) { return "unsupported"; } }
+  function loadFired() { try { return JSON.parse(localStorage.getItem(LS_FIRED) || "{}") || {}; } catch (e) { return {}; } }
+  function saveFired(f) { try { localStorage.setItem(LS_FIRED, JSON.stringify(f)); } catch (e) {} }
+  function ui() {
+    var p = perm(), o = on();
+    btn.textContent = o ? "🔔 提醒：开" : "🔕 提醒：关";
+    btn.className = o ? "on" : "";
+    var mode = p === "granted" ? "系统通知" : "页内横幅+振动+提示音";
+    hint.textContent = o ? ("提前" + LEAD + "分钟+准点 · " + mode + " · 需保持本页打开，关闭/后台无法响铃") : "仅在本页打开时提醒";
+  }
+  function unlockAudio() {
+    try { var AC = window.AudioContext || window.webkitAudioContext; if (AC && !actx) actx = new AC(); if (actx && actx.resume) actx.resume(); } catch (e) {}
+  }
+  function beep() {
+    try {
+      if (!actx) return;
+      var o = actx.createOscillator(), g = actx.createGain();
+      o.frequency.value = 880; g.gain.value = 0.15; o.connect(g); g.connect(actx.destination);
+      o.start(); o.stop(actx.currentTime + 0.35);
+    } catch (e) {}
+  }
+  function banner(title, body) {
+    ban.innerHTML = "";
+    var b = document.createElement("b"); b.textContent = title; ban.appendChild(b);
+    var s = document.createElement("div"); s.textContent = body; ban.appendChild(s);
+    ban.style.display = "block";
+    clearTimeout(ban._t); ban._t = setTimeout(function () { ban.style.display = "none"; }, 120000);
+  }
+  function fallback(title, body) {
+    try { if (navigator.vibrate) navigator.vibrate([300, 150, 300]); } catch (e) {}
+    beep();
+  }
+  function notify(title, body, tag) {
+    banner(title, body); /* always visible in-page */
+    window.__rdRemLog = window.__rdRemLog || []; window.__rdRemLog.push({ title: title, tag: tag, at: Date.now(), via: perm() === "granted" ? "notification" : "fallback" });
+    if (perm() !== "granted") { fallback(title, body); return; }
+    var o = { body: body, tag: tag, renotify: true };
+    function plain() { try { new Notification(title, o); } catch (e) { fallback(title, body); } }
+    try {
+      if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) {
+        navigator.serviceWorker.getRegistration().then(function (r) {
+          if (r && r.showNotification) r.showNotification(title, o).catch(plain); else plain();
+        }, plain);
+      } else plain();
+    } catch (e) { plain(); }
+  }
+  function check() {
+    if (!on()) return;
+    var v = opts.getView(), n = opts.getNow();
+    if (!v || !v.days || !n) return;
+    var day = null;
+    for (var i = 0; i < v.days.length; i++) if (v.days[i].date === n.date) day = v.days[i];
+    if (!day) return;
+    var fired = loadFired(), changed = false, k;
+    for (k in fired) if (k.slice(0, 10) !== n.date) { delete fired[k]; changed = true; }
+    var bl = day.blocks || [];
+    for (var j = 0; j < bl.length; j++) {
+      var b = bl[j];
+      if (b.kind === "note" || !/^\d{1,2}:\d{2}$/.test(b.start || "")) continue;
+      var sm = +b.start.split(":")[0] * 60 + +b.start.split(":")[1];
+      var base = n.date + "|" + (b.id || b.title) + "|" + b.start + "|";
+      var list = [["pre", sm - LEAD, "即将开始（" + LEAD + "分钟后）：" + b.title], ["start", sm, "现在开始：" + b.title]];
+      for (var q = 0; q < list.length; q++) {
+        var t = list[q][1], key = base + list[q][0];
+        if (t < 0 || fired[key]) continue;
+        if (n.min >= t && n.min < t + WINDOW) {
+          fired[key] = Date.now(); changed = true;
+          notify(list[q][2], b.start + (b.end ? "–" + b.end : "") + " " + b.title, "rd-" + (b.id || sm) + "-" + list[q][0]);
+        }
+      }
+    }
+    if (changed) saveFired(fired);
+  }
+  btn.addEventListener("click", function (e) {
+    e.stopPropagation();
+    unlockAudio();
+    if (on()) { try { localStorage.setItem(LS_ON, "0"); } catch (x) {} ui(); return; }
+    try { localStorage.setItem(LS_ON, "1"); } catch (x) {}
+    ui();
+    if (hasN() && perm() === "default") {
+      try {
+        var r = Notification.requestPermission(function () { ui(); });
+        if (r && r.then) r.then(ui, ui);
+      } catch (x) {}
+    }
+    check();
+  });
+  ban.addEventListener("click", function () { ban.style.display = "none"; });
+  document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") check(); });
+  ui();
+  setInterval(check, 15000);
+  setTimeout(check, 1500);
+  return { check: check };
+}
+rdReminders({leadMin:10,getView:function(){return V},getNow:function(){var n=nowParts(configure().timezone);var p=n.hm.split(":");return {date:n.date,min:+p[0]*60+ +p[1]}}});
 </script>
 </body>
 </html>
